@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: fashionvibe-api
+    runtime: python
+    region: oregon          # Change to frankfurt if your users are EU-based
+    plan: free              # Upgrade to starter ($7/mo) before sharing with real users
+                            # Free tier spins down after 15min inactivity — cold starts
+                            # take ~30s and will confuse your first demo users.
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+
+    # Environment variables are set in the Render dashboard, NOT here.
+    # List them here as placeholders so Render validates they exist at deploy time.
+    # Values are injected securely from the Render environment — never committed to git.
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false           # sync: false = must be set manually in Render dashboard
+
+      - key: SHOPIFY_STORE_NAME
+        sync: false
+
+      - key: SHOPIFY_ACCESS_TOKEN
+        sync: false
+
+      - key: ALLOWED_ORIGINS
+        sync: false           # Set to: http://localhost:3000,https://your-app.vercel.app
+                              # Add your Vercel URL here after frontend deploys
