@@ -38,11 +38,9 @@ ALLOWED_ORIGINS = [origin.strip() for origin in _raw_origins.split(",") if origi
 # App
 # ---------------------------------------------------------------------------
 app = FastAPI(
-    title="FashionVibe AI",
+    title="NeboCollections",
     description=(
-        "Shopify-to-Social pipeline. "
-        "Scrape any Shopify product → generate high-converting persona-styled copy "
-        "→ publish directly back to your live Shopify storefront."
+        "The core processing engine for NeboCollections commerce automation."
     ),
     version="3.0.0",
     docs_url="/docs",
@@ -75,7 +73,7 @@ app.include_router(publish_router)
 @app.get("/", include_in_schema=False)
 async def root():
     return {
-        "service": "FashionVibe AI",
+        "service": "NeboCollections AI",
         "version": "3.0.0",
         "pipeline": "scrape → generate → publish",
         "endpoints": {
