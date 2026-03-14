@@ -164,10 +164,10 @@ export default function Home() {
         {/* Header */}
         <header className="mb-16 text-center">
           <h1 className="text-4xl font-light tracking-tight text-foreground">
-            FashionVibe
+            NeboCollections
           </h1>
           <p className="mt-3 text-muted-foreground">
-            AI-powered copy for your fashion brand
+            AI-powered copy for the modern fashion house.
           </p>
         </header>
 
