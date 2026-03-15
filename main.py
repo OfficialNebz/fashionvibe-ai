@@ -50,7 +50,7 @@ ALLOWED_ORIGINS = [origin.strip() for origin in _raw_origins.split(",") if origi
 # App
 # ---------------------------------------------------------------------------
 app = FastAPI(
-    title="FashionVibe AI",
+    title="NeboCollections AI",
     description=(
         "Shopify-to-Social pipeline. "
         "Scrape any Shopify product → generate high-converting persona-styled copy "

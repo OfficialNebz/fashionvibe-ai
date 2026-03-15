@@ -3,10 +3,11 @@
 import { useState } from 'react'
 import Image from 'next/image'
 import { Copy, Check, ArrowRight, Sparkles } from 'lucide-react'
+import posthog from 'posthog-js'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'  // FIX 1: Removed hallucinated CardAction import
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Select,
   SelectContent,
@@ -26,6 +27,27 @@ import {
   type Persona,
 } from '@/lib/api'
 
+// ---------------------------------------------------------------------------
+// Spinner — inline SVG, no external dependency
+// ---------------------------------------------------------------------------
+function Spinner() {
+  return (
+    <svg
+      className="size-4 animate-spin"
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+    >
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+    </svg>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Home
+// ---------------------------------------------------------------------------
 export default function Home() {
   const [url, setUrl] = useState('')
   const [product, setProduct] = useState<ProductData | null>(null)
@@ -40,6 +62,7 @@ export default function Home() {
   const [publishSuccess, setPublishSuccess] = useState(false)
   const [copiedField, setCopiedField] = useState<string | null>(null)
 
+  // ── Scrape ────────────────────────────────────────────────────────────────
   async function handleScrape(e: React.FormEvent) {
     e.preventDefault()
     if (!url.trim()) return
@@ -54,18 +77,25 @@ export default function Home() {
     try {
       const data = await scrapeProduct(url)
       setProduct(data)
+      posthog.capture('product_scraped', {
+        persona: selectedPersona,
+        product_title: data.title,
+        vendor: data.vendor,
+      })
     } catch (err) {
-      // FIX 4: Branch on HTTP status for specific, actionable error messages
       if (err instanceof ApiError) {
         switch (err.status) {
           case 400:
-            setScrapeError('That URL doesn\'t look like a Shopify product page. Make sure it contains /products/ in the path.')
+            setScrapeError("That URL doesn't look like a Shopify product page. Make sure it contains /products/ in the path.")
             break
           case 403:
             setScrapeError('This store is password-protected and cannot be accessed.')
             break
           case 404:
             setScrapeError('Product not found. Check the URL is pointing to a live product.')
+            break
+          case 429:
+            setScrapeError('You have used all 3 demo scrapes for the next 12 hours. Contact support to unlock the full pipeline.')
             break
           case 504:
             setScrapeError('The store took too long to respond. Try again in a moment.')
@@ -81,6 +111,7 @@ export default function Home() {
     }
   }
 
+  // ── Generate ──────────────────────────────────────────────────────────────
   async function handleGenerate() {
     if (!product) return
 
@@ -92,8 +123,11 @@ export default function Home() {
     try {
       const copy = await generateCopy(product, selectedPersona)
       setGeneratedCopy(copy)
+      posthog.capture('copy_generated', {
+        persona: selectedPersona,
+        product_title: product.title,
+      })
     } catch (err) {
-      // FIX 4: Status-aware generate errors
       if (err instanceof ApiError) {
         switch (err.status) {
           case 422:
@@ -113,6 +147,7 @@ export default function Home() {
     }
   }
 
+  // ── Publish ───────────────────────────────────────────────────────────────
   async function handlePublish() {
     if (!product || !generatedCopy) return
 
@@ -123,6 +158,11 @@ export default function Home() {
     try {
       await publishDescription(product.product_id, generatedCopy.website_description)
       setPublishSuccess(true)
+      posthog.capture('description_published', {
+        product_id: product.product_id,
+        product_title: product.title,
+        persona: selectedPersona,
+      })
     } catch (err) {
       if (err instanceof ApiError) {
         switch (err.status) {
@@ -149,6 +189,7 @@ export default function Home() {
     }
   }
 
+  // ── Clipboard ─────────────────────────────────────────────────────────────
   async function copyToClipboard(text: string, field: string) {
     await navigator.clipboard.writeText(text)
     setCopiedField(field)
@@ -157,6 +198,7 @@ export default function Home() {
 
   const primaryImage = product?.images?.[0]
 
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <main className="min-h-screen bg-background">
       <div className="mx-auto max-w-3xl px-6 py-20">
@@ -167,7 +209,7 @@ export default function Home() {
             NeboCollections
           </h1>
           <p className="mt-3 text-muted-foreground">
-            AI-powered copy for the modern fashion house.
+            AI-powered copy for your fashion brand
           </p>
         </header>
 
@@ -187,19 +229,7 @@ export default function Home() {
               disabled={isScraping || !url.trim()}
               className="h-12 px-6"
             >
-              {isScraping ? (
-                // FIX 2: Replaced non-existent <Spinner> with an inline SVG spinner
-                <svg
-                  className="size-4 animate-spin"
-                  xmlns="http://www.w3.org/2000/svg"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  aria-hidden="true"
-                >
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-                </svg>
-              ) : (
+              {isScraping ? <Spinner /> : (
                 <>
                   <span>Scrape</span>
                   <ArrowRight className="size-4" />
@@ -218,8 +248,6 @@ export default function Home() {
             <div className="flex flex-col items-center gap-8 sm:flex-row sm:items-start">
               {primaryImage && (
                 <div className="relative aspect-square w-full max-w-[200px] shrink-0 overflow-hidden rounded-lg border border-border/40 bg-muted/30">
-                  {/* FIX 3: unoptimized bypasses the Next.js domain allowlist for Shopify CDN images.
-                      Alternative: add hostname config to next.config.ts (see below). */}
                   <Image
                     src={primaryImage.src}
                     alt={primaryImage.alt || product.title}
@@ -269,18 +297,7 @@ export default function Home() {
                 disabled={isGenerating}
                 className="h-12 w-full px-8 sm:w-auto"
               >
-                {isGenerating ? (
-                  <svg
-                    className="size-4 animate-spin"
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    aria-hidden="true"
-                  >
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-                  </svg>
-                ) : (
+                {isGenerating ? <Spinner /> : (
                   <>
                     <Sparkles className="size-4" />
                     <span>Generate Copy</span>
@@ -314,9 +331,7 @@ export default function Home() {
             <CopyCard
               title="Website Description"
               content={generatedCopy.website_description}
-              onCopy={() =>
-                copyToClipboard(generatedCopy.website_description, 'website')
-              }
+              onCopy={() => copyToClipboard(generatedCopy.website_description, 'website')}
               copied={copiedField === 'website'}
             />
 
@@ -330,16 +345,7 @@ export default function Home() {
               >
                 {isPublishing ? (
                   <>
-                    <svg
-                      className="size-4 animate-spin"
-                      xmlns="http://www.w3.org/2000/svg"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      aria-hidden="true"
-                    >
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-                    </svg>
+                    <Spinner />
                     <span>Publishing...</span>
                   </>
                 ) : publishSuccess ? (
@@ -357,7 +363,6 @@ export default function Home() {
                   Your product description is now live on your storefront.
                 </p>
               )}
-
               {publishError && (
                 <p className="text-center text-sm text-destructive animate-in fade-in duration-300">
                   {publishError}
@@ -366,12 +371,19 @@ export default function Home() {
             </div>
           </section>
         )}
+
       </div>
+
+      {/* Feedback Form */}
+      <FeedbackForm />
+
     </main>
   )
 }
 
-// FIX 1: CopyCard rebuilt without CardAction — copy button moved inline into CardHeader
+// ---------------------------------------------------------------------------
+// CopyCard
+// ---------------------------------------------------------------------------
 function CopyCard({
   title,
   content,
@@ -391,7 +403,6 @@ function CopyCard({
         <CardTitle className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
           {title}
         </CardTitle>
-        {/* FIX 1: Removed size="icon-sm" (invalid variant) — replaced with explicit sizing */}
         <Button
           variant="ghost"
           size="icon"
@@ -417,5 +428,83 @@ function CopyCard({
         )}
       </CardContent>
     </Card>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// FeedbackForm — Formspree (xlgpwaby)
+// ---------------------------------------------------------------------------
+function FeedbackForm() {
+  const [submitted, setSubmitted] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [feedback, setFeedback] = useState('')
+  const [email, setEmail] = useState('')
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!feedback.trim()) return
+    setSubmitting(true)
+    try {
+      const res = await fetch('https://formspree.io/f/xlgpwaby', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ email, message: feedback }),
+      })
+      if (res.ok) {
+        setSubmitted(true)
+        setFeedback('')
+        setEmail('')
+      }
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="mx-auto max-w-3xl px-6 mt-20 pb-20 border-t border-border/40 pt-12">
+      <div className="text-center mb-8">
+        <h2 className="text-lg font-light tracking-tight text-foreground">
+          Share your thoughts
+        </h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          What would make this tool essential for your brand?
+        </p>
+      </div>
+      {submitted ? (
+        <div className="flex flex-col items-center gap-2 py-6 animate-in fade-in duration-300">
+          <Check className="size-5 text-green-600" />
+          <p className="text-sm text-muted-foreground">
+            Received — thank you. We read every response.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-3 max-w-lg mx-auto">
+          <Input
+            type="email"
+            placeholder="Your email (optional)"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="h-11 border-border/60 bg-background"
+            disabled={submitting}
+          />
+          <textarea
+            placeholder="What's working? What's missing? What would you pay for?"
+            value={feedback}
+            onChange={(e) => setFeedback(e.target.value)}
+            rows={4}
+            disabled={submitting}
+            className="w-full resize-none rounded-md border border-border/60 bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+          />
+          <Button
+            onClick={handleSubmit}
+            disabled={submitting || !feedback.trim()}
+            variant="outline"
+            className="w-full h-11"
+          >
+            {submitting ? 'Sending...' : 'Send Feedback'}
+          </Button>
+        </div>
+      )}
+    </div>
   )
 }
