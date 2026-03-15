@@ -2,8 +2,8 @@
 FashionVibe AI — Phase 2: AI Persona Generation Layer
 ------------------------------------------------------
 Endpoint : POST /generate
-Model    : gemini-2.0-flash  (Free/Plus tier)
-           claude-sonnet-4-5 (Pro tier — Phase 3)
+Model    : llama-3.3-70b-versatile via Groq (free tier, <500ms)
+           Swap to gemini or claude by changing GROQ_MODEL and client below.
 Personas : Exquisite | Ladylike | Street Vibes | Minimalist Chic
 Author   : FashionVibe AI Engineering
 """
@@ -14,28 +14,33 @@ import os
 from enum import Enum
 from typing import Any
 
-import google.generativeai as genai
+from groq import AsyncGroq
 from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from scraper import ProductData  # Re-use the schema we already defined
+from scraper import ProductData
 
 # ---------------------------------------------------------------------------
 # Bootstrap
 # ---------------------------------------------------------------------------
-load_dotenv()  # Reads .env file in project root
+load_dotenv()
 
 logger = logging.getLogger("fashionvibe.generator")
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+if not GROQ_API_KEY:
     raise RuntimeError(
-        "GEMINI_API_KEY is not set. "
-        "Add it to your .env file: GEMINI_API_KEY=your_key_here"
+        "GROQ_API_KEY is not set. "
+        "Get a free key at https://console.groq.com — "
+        "add to .env: GROQ_API_KEY=gsk_xxxxxxxxxxxx"
     )
 
-genai.configure(api_key=GEMINI_API_KEY)
+# Model: llama-3.3-70b-versatile — best quality on Groq free tier.
+# Groq free tier limits: 6000 tokens/min, 500 req/day — sufficient for demo.
+GROQ_MODEL = "llama-3.3-70b-versatile"
+
+groq_client = AsyncGroq(api_key=GROQ_API_KEY)
 
 # ---------------------------------------------------------------------------
 # Persona Enum — enforces only valid values at the API boundary
@@ -176,166 +181,66 @@ def _extract_price_range(variants: list[Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Gemini Call — MOCK MODE
-# ---------------------------------------------------------------------------
-# ⚠️  MOCK ACTIVE: Real Gemini API call is bypassed due to billing quota (429).
-#     To restore live calls:
-#       1. Resolve billing at https://aistudio.google.com
-#       2. Delete this function entirely
-#       3. Restore the original call_gemini() from git history (or Phase 2 notes)
-#       4. Remove the `title` and `vendor` params from the callsite in generate_copy()
+# Live AI Call — Groq / Llama 3.3
 # ---------------------------------------------------------------------------
 
-async def call_gemini(
-    system_prompt: str,   # kept in signature — drop-in restore when billing resolves
-    user_prompt: str,     # kept in signature — drop-in restore when billing resolves
-    title: str = "The Product",
-    vendor: str = "The Brand",
-) -> dict:
+async def call_groq(system_prompt: str, user_prompt: str) -> dict:
     """
-    MOCK: Returns a hardcoded, persona-matched GeneratedCopy dictionary.
-    Injects `title` and `vendor` via f-strings so frontend data feels real.
-    Persona is extracted from `system_prompt` via a lookup against the
-    PERSONA_SYSTEM_PROMPTS map — no extra argument needed.
+    Calls Groq's Llama 3.3 70B model with the persona system prompt and
+    structured product brief.
+
+    Why Groq over Gemini free tier:
+    Groq runs on dedicated LPU hardware — median latency <500ms vs 2-4s for
+    Gemini free tier. For a live demo where a founder is watching a spinner,
+    that difference is the gap between "impressive" and "is this broken."
+
+    JSON enforcement strategy:
+    response_format={"type": "json_object"} forces the model to return valid
+    JSON without markdown fences. The system prompt still specifies the exact
+    schema as a belt-and-suspenders measure.
     """
-
-    # Identify which persona we're in by matching the system_prompt reference
-    persona_key: Persona = Persona.EXQUISITE  # safe default
-    for p, prompt_text in PERSONA_SYSTEM_PROMPTS.items():
-        if prompt_text == system_prompt:
-            persona_key = p
-            break
-
-    logger.info(f"[MOCK] Generating copy for persona={persona_key.value} | title='{title}'")
-
-    templates: dict[Persona, dict] = {
-
-        # ── EXQUISITE ────────────────────────────────────────────────────────
-        Persona.EXQUISITE: {
-            "instagram_caption": (
-                f"She doesn't chase the season. She defines it.\n\n"
-                f"The {title} by {vendor} — conceived for the woman who understands "
-                f"that true elegance is never loud. Every seam is a considered decision. "
-                f"Every silhouette, a quiet statement.\n\n"
-                f"This is not fast fashion. This is fashion that endures.\n\n"
-                f"Explore the collection. Link in bio."
-            ),
-            "instagram_hashtags": [
-                "SlowFashion", "LuxuryFashion", "ConsideredDesign",
-                "WomenWhoWear", "EditorialFashion", "QuietLuxury",
-                "TimelessStyle", "IndependentDesigner", "FashionVibeAI",
-                vendor.replace(" ", ""),
+    try:
+        response = await groq_client.chat.completions.create(
+            model=GROQ_MODEL,
+            response_format={"type": "json_object"},
+            temperature=0.85,
+            max_tokens=1024,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": user_prompt},
             ],
-            "website_description": (
-                f"The {title} is a study in restraint. Conceived for the woman "
-                f"who has moved beyond trend cycles, this piece exists at the intersection "
-                f"of craft and intention. The silhouette is architectural — precise where "
-                f"it needs to be, generous where it matters. Wear it to the opening. "
-                f"Wear it to dinner. Wear it when the occasion demands that you arrive "
-                f"already dressed for the conversation. {vendor} presents this as a "
-                f"wardrobe investment — not a purchase, but a decision."
-            ),
-            "copy_notes": (
-                "Copy leans into authority over aspiration — targeting buyers who "
-                "self-identify as beyond trend culture and respond to restraint as a luxury signal."
-            ),
-        },
+        )
 
-        # ── LADYLIKE ─────────────────────────────────────────────────────────
-        Persona.LADYLIKE: {
-            "instagram_caption": (
-                f"The one you reach for on every occasion that matters. 🤍\n\n"
-                f"Meet the {title} from {vendor} — the kind of piece that feels like "
-                f"it was made for Sunday mornings that turn into Saturday evenings. "
-                f"Effortlessly refined, quietly feminine, and designed to feel as beautiful "
-                f"as it looks.\n\n"
-                f"Some things never go out of style. This is one of them.\n\n"
-                f"Shop via the link in bio — you deserve something lovely."
-            ),
-            "instagram_hashtags": [
-                "LadylikeFashion", "TimelessWardrobe", "FeminineStyle",
-                "ClassicAndChic", "WardrobeClassics", "ElegantWomen",
-                "StyleForWomen", "IndependentFashion", "FashionVibeAI",
-                vendor.replace(" ", ""),
-            ],
-            "website_description": (
-                f"Some pieces enter your wardrobe and never leave. The {title} by {vendor} "
-                f"is one of them. Designed with the modern woman's life in mind — full days, "
-                f"meaningful evenings, occasions that deserve to be remembered — this is "
-                f"dressing with intention. The silhouette is graceful, the details deliberate, "
-                f"and the feel instantly familiar. Pair it with everything. Reach for it always. "
-                f"A {vendor} wardrobe essential that honours the art of dressing well."
-            ),
-            "copy_notes": (
-                "Lifestyle-forward framing targets brand-loyal buyers who purchase on "
-                "emotional resonance and longevity, not trend urgency."
-            ),
-        },
+        raw_text = response.choices[0].message.content.strip()
 
-        # ── STREET VIBES ─────────────────────────────────────────────────────
-        Persona.STREET_VIBES: {
-            "instagram_caption": (
-                f"The silhouette is the statement. 🖤\n\n"
-                f"{title} just dropped and it's giving everything it's supposed to give. "
-                f"{vendor} said no notes — and honestly? No notes. "
-                f"The drip is intentional, the energy is locked, and your camera roll "
-                f"is about to look very different.\n\n"
-                f"Deadass limited. Don't sleep.\n\n"
-                f"Link in bio. You already know. ⚡"
-            ),
-            "instagram_hashtags": [
-                "StreetStyle", "FashionDrop", "OOTD",
-                "Drip", "StyleAlert", "NewDrop",
-                "UrbanFashion", "GenZFashion", "FashionVibeAI",
-                vendor.replace(" ", ""),
-            ],
-            "website_description": (
-                f"The {title} by {vendor} hits different. This isn't background noise — "
-                f"this is a piece that changes the energy of the room the moment you walk in. "
-                f"Cut with intention, built for movement, designed to be seen. "
-                f"The details are deliberate. The attitude is built in. "
-                f"Wear it like you already know you're the best-dressed person there. "
-                f"Because you will be. {vendor}. No further questions."
-            ),
-            "copy_notes": (
-                "Slang used sparingly and purposefully — two instances max — "
-                "to signal cultural fluency without reading as performative."
-            ),
-        },
+        # Strip markdown fences defensively — some models ignore json_object mode
+        if raw_text.startswith("```"):
+            raw_text = raw_text.split("```")[1]
+            if raw_text.startswith("json"):
+                raw_text = raw_text[4:]
 
-        # ── MINIMALIST CHIC ──────────────────────────────────────────────────
-        Persona.MINIMALIST_CHIC: {
-            "instagram_caption": (
-                f"Less, done exceptionally.\n\n"
-                f"The {title}. By {vendor}.\n\n"
-                f"One piece. Every occasion. No compromises.\n\n"
-                f"Available now. Link in bio."
-            ),
-            "instagram_hashtags": [
-                "MinimalistFashion", "QuietLuxury", "ConsciousWardrobe",
-                "LessIsMore", "CleanAesthetic", "MinimalistStyle",
-                "InvestmentPiece", "SlowFashion", "FashionVibeAI",
-                vendor.replace(" ", ""),
-            ],
-            "website_description": (
-                f"The {title} by {vendor} is a precise thing. "
-                f"The proportion is considered. The construction is clean. "
-                f"There are no decorative elements that do not serve the garment. "
-                f"It is made to be worn repeatedly, across contexts, without adjustment. "
-                f"Dress it up. Dress it down. It will not falter. "
-                f"This is what a wardrobe foundation looks like when craft is the priority. "
-                f"A {vendor} investment that earns its place every time you reach for it."
-            ),
-            "copy_notes": (
-                "Copy mirrors the product's design philosophy — no excess, "
-                "no lifestyle fantasy, direct appeal to the intelligent minimal buyer."
-            ),
-        },
-    }
+        parsed = json.loads(raw_text)
+        logger.info(f"Groq generation successful — model={GROQ_MODEL}")
+        return parsed
 
-    return templates[persona_key]
+    except json.JSONDecodeError as e:
+        raw = response.choices[0].message.content[:300] if response else "no response"
+        logger.error(f"Groq returned non-JSON: {raw}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"AI model returned malformed JSON: {str(e)}",
+        )
+    except Exception as e:
+        logger.error(f"Groq API error: {type(e).__name__}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI generation service error: {str(e)}",
+        )
 
 
+# ---------------------------------------------------------------------------
+# Schemas
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
@@ -400,12 +305,7 @@ async def generate_copy(request: GenerateRequest) -> GenerateResponse:
         f"Generating copy — product: '{request.product.title}' | persona: {persona_enum.value}"
     )
 
-    raw_copy = await call_gemini(
-        system_prompt,
-        user_prompt,
-        title=request.product.title,
-        vendor=request.product.vendor or "Independent Brand",
-    )
+    raw_copy = await call_groq(system_prompt, user_prompt)
 
     # Validate shape of AI response before returning to client
     try:
