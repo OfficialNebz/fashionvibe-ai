@@ -23,32 +23,17 @@ import {
   generateCopy,
   publishDescription,
   ApiError,
+  PERSONA_GROUPS,
+  type Persona,
   type ProductData,
   type GeneratedCopy,
-  type Persona,
 } from '@/lib/api'
 
 // ---------------------------------------------------------------------------
-// Persona groups — mirrors PERSONA_GROUPS in generator.py
-// Defined here so the frontend has no runtime dependency on the backend enum.
+// Constants
 // ---------------------------------------------------------------------------
-const PERSONA_GROUPS: Record<string, Persona[]> = {
-  WOMEN: ['Exquisite', 'Ladylike', 'Street Vibes', 'Minimalist Chic', 'Eco-Conscious'],
-  MEN:   ['The Executive', 'Hypebeast', 'The Rugged', 'Tailored Modern', 'The Minimalist'],
-  CHILDREN: [
-    'Playful & Bright',
-    'The Mini-Me',
-    'Durable Adventure',
-    'Whimsical Tale',
-    'Soft & Pure',
-  ],
-} as Record<string, Persona[]>
-
-const DEFAULT_PERSONA: Persona = 'Exquisite'
-
-// Character limits matching Shopify and Instagram platform constraints
-const INSTAGRAM_CAP = 2200
-const WEBSITE_CAP   = 5000
+const IG_CAP  = 2200
+const WEB_CAP = 5000
 
 // ---------------------------------------------------------------------------
 // Spinner
@@ -62,9 +47,85 @@ function Spinner() {
       viewBox="0 0 24 24"
       aria-hidden="true"
     >
-      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+      <circle
+        className="opacity-25"
+        cx="12" cy="12" r="10"
+        stroke="currentColor" strokeWidth="4"
+      />
+      <path
+        className="opacity-75"
+        fill="currentColor"
+        d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+      />
     </svg>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// EditableCopyCard
+// ---------------------------------------------------------------------------
+function EditableCopyCard({
+  title,
+  value,
+  onChange,
+  maxLength,
+  hashtags,
+  onCopy,
+  copied,
+  rows = 6,
+}: {
+  title: string
+  value: string
+  onChange: (val: string) => void
+  maxLength: number
+  hashtags?: string[]
+  onCopy: () => void
+  copied: boolean
+  rows?: number
+}) {
+  const remaining  = maxLength - value.length
+  const nearLimit  = remaining < maxLength * 0.1
+
+  return (
+    <Card className="border-border/40">
+      <CardHeader className="flex flex-row items-center justify-between pb-3">
+        <CardTitle className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+          {title}
+        </CardTitle>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onCopy}
+          className="size-8 text-muted-foreground hover:text-foreground"
+        >
+          {copied
+            ? <Check className="size-4 text-green-600" />
+            : <Copy className="size-4" />
+          }
+          <span className="sr-only">Copy to clipboard</span>
+        </Button>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <textarea
+          value={value}
+          onChange={(e) => onChange(e.target.value.slice(0, maxLength))}
+          rows={rows}
+          className="w-full resize-y rounded-md border border-border/60 bg-background px-3 py-2 text-sm text-foreground leading-relaxed placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        />
+        <div className="flex items-center justify-between gap-2">
+          {hashtags && hashtags.length > 0 && (
+            <p className="text-xs text-muted-foreground truncate">
+              {hashtags.map((tag) => `#${tag}`).join(' ')}
+            </p>
+          )}
+          <p className={`ml-auto shrink-0 text-xs tabular-nums ${
+            nearLimit ? 'text-destructive' : 'text-muted-foreground'
+          }`}>
+            {remaining.toLocaleString()} / {maxLength.toLocaleString()}
+          </p>
+        </div>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -72,27 +133,30 @@ function Spinner() {
 // Home
 // ---------------------------------------------------------------------------
 export default function Home() {
-  const [url, setUrl] = useState('')
-  const [product, setProduct] = useState<ProductData | null>(null)
+  // ── Core pipeline state ──────────────────────────────────────────────────
+  const [url, setUrl]                   = useState('')
+  const [product, setProduct]           = useState<ProductData | null>(null)
   const [generatedCopy, setGeneratedCopy] = useState<GeneratedCopy | null>(null)
-  const [selectedPersona, setSelectedPersona] = useState<Persona>(DEFAULT_PERSONA)
 
-  // Editable output state — seeded from AI response, user can modify before publishing
-  const [editedCaption, setEditedCaption]     = useState('')
-  const [editedWebsite, setEditedWebsite]     = useState('')
+  // Editable fields are decoupled from generatedCopy so founder edits
+  // don't mutate the original AI output. handlePublish sends these values.
+  const [editedCaption, setEditedCaption]         = useState('')
+  const [editedDescription, setEditedDescription] = useState('')
 
+  // The default persona — must be a valid Persona literal
+  const [selectedPersona, setSelectedPersona] = useState<Persona>('Exquisite')
+
+  // ── Loading & error state ────────────────────────────────────────────────
   const [isScraping, setIsScraping]   = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
   const [isPublishing, setIsPublishing] = useState(false)
-
   const [scrapeError, setScrapeError]   = useState<string | null>(null)
   const [generateError, setGenerateError] = useState<string | null>(null)
   const [publishError, setPublishError]   = useState<string | null>(null)
   const [publishSuccess, setPublishSuccess] = useState(false)
+  const [copiedField, setCopiedField]       = useState<string | null>(null)
 
-  const [copiedField, setCopiedField] = useState<string | null>(null)
-
-  // ── Scrape ──────────────────────────────────────────────────────────────
+  // ── Scrape ────────────────────────────────────────────────────────────────
   async function handleScrape(e: React.FormEvent) {
     e.preventDefault()
     if (!url.trim()) return
@@ -102,7 +166,7 @@ export default function Home() {
     setProduct(null)
     setGeneratedCopy(null)
     setEditedCaption('')
-    setEditedWebsite('')
+    setEditedDescription('')
     setPublishSuccess(false)
     setPublishError(null)
 
@@ -143,7 +207,7 @@ export default function Home() {
     }
   }
 
-  // ── Generate ────────────────────────────────────────────────────────────
+  // ── Generate ──────────────────────────────────────────────────────────────
   async function handleGenerate() {
     if (!product) return
 
@@ -151,13 +215,15 @@ export default function Home() {
     setGenerateError(null)
     setPublishSuccess(false)
     setPublishError(null)
+    setEditedCaption('')
+    setEditedDescription('')
 
     try {
       const copy = await generateCopy(product, selectedPersona)
       setGeneratedCopy(copy)
-      // Seed the editable fields with the AI output
+      // Seed editable fields — founder owns these strings from this point
       setEditedCaption(copy.instagram_caption)
-      setEditedWebsite(copy.website_description)
+      setEditedDescription(copy.website_description)
       posthog.capture('copy_generated', {
         persona: selectedPersona,
         product_title: product.title,
@@ -182,24 +248,24 @@ export default function Home() {
     }
   }
 
-  // ── Publish ─────────────────────────────────────────────────────────────
-  // Sends editedWebsite — the current state of the editable textarea —
-  // not the original AI output. This allows founders to tweak before publishing.
+  // ── Publish ───────────────────────────────────────────────────────────────
+  // Sends editedDescription — the founder's current textarea value.
+  // was_edited tracks whether the copy was modified before publishing.
   async function handlePublish() {
-    if (!product || !editedWebsite.trim()) return
+    if (!product || !editedDescription.trim()) return
 
     setIsPublishing(true)
     setPublishError(null)
     setPublishSuccess(false)
 
     try {
-      await publishDescription(product.product_id, editedWebsite)
+      await publishDescription(product.product_id, editedDescription)
       setPublishSuccess(true)
       posthog.capture('description_published', {
         product_id: product.product_id,
         product_title: product.title,
         persona: selectedPersona,
-        was_edited: editedWebsite !== generatedCopy?.website_description,
+        was_edited: editedDescription !== generatedCopy?.website_description,
       })
     } catch (err) {
       if (err instanceof ApiError) {
@@ -227,7 +293,7 @@ export default function Home() {
     }
   }
 
-  // ── Clipboard ────────────────────────────────────────────────────────────
+  // ── Clipboard ─────────────────────────────────────────────────────────────
   async function copyToClipboard(text: string, field: string) {
     await navigator.clipboard.writeText(text)
     setCopiedField(field)
@@ -236,7 +302,7 @@ export default function Home() {
 
   const primaryImage = product?.images?.[0]
 
-  // ── Render ───────────────────────────────────────────────────────────────
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <main className="min-h-screen bg-background">
       <div className="mx-auto max-w-3xl px-6 py-20">
@@ -301,7 +367,9 @@ export default function Home() {
                   {product.title}
                 </h2>
                 {product.vendor && (
-                  <p className="mt-1 text-sm text-muted-foreground">by {product.vendor}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    by {product.vendor}
+                  </p>
                 )}
                 {product.product_type && (
                   <p className="mt-2 text-xs uppercase tracking-wider text-muted-foreground/70">
@@ -311,28 +379,30 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Persona Selector — grouped by Women / Men / Children */}
+            {/* Persona Selector — grouped by WOMEN / MEN / CHILDREN */}
             <div className="mt-10 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
               <Select
                 value={selectedPersona}
                 onValueChange={(value) => setSelectedPersona(value as Persona)}
               >
-                <SelectTrigger className="h-12 w-full sm:w-[240px]">
+                <SelectTrigger className="h-12 w-full sm:w-[220px]">
                   <SelectValue placeholder="Select persona" />
                 </SelectTrigger>
                 <SelectContent>
-                  {Object.entries(PERSONA_GROUPS).map(([group, personas]) => (
-                    <SelectGroup key={group}>
-                      <SelectLabel className="text-xs font-semibold tracking-widest text-muted-foreground/60 uppercase px-2 py-1.5">
-                        {group}
-                      </SelectLabel>
-                      {personas.map((persona) => (
-                        <SelectItem key={persona} value={persona}>
-                          {persona}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  ))}
+                  {(Object.entries(PERSONA_GROUPS) as [string, Persona[]][]).map(
+                    ([group, personas]) => (
+                      <SelectGroup key={group}>
+                        <SelectLabel className="text-xs font-semibold uppercase tracking-widest text-muted-foreground px-2 py-1.5">
+                          {group}
+                        </SelectLabel>
+                        {personas.map((persona) => (
+                          <SelectItem key={persona} value={persona}>
+                            {persona}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    )
+                  )}
                 </SelectContent>
               </Select>
 
@@ -351,44 +421,43 @@ export default function Home() {
             </div>
 
             {generateError && (
-              <p className="mt-4 text-center text-sm text-destructive">{generateError}</p>
+              <p className="mt-4 text-center text-sm text-destructive">
+                {generateError}
+              </p>
             )}
           </section>
         )}
 
-        {/* Generated Copy — Editable */}
+        {/* Generated Copy — Editable Cards */}
         {generatedCopy && (
           <section className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <p className="text-center text-xs text-muted-foreground tracking-wide uppercase">
+              Edit before publishing — changes are yours
+            </p>
 
-            {/* Instagram Caption */}
-            <EditableCard
+            <EditableCopyCard
               title="Instagram Caption"
               value={editedCaption}
               onChange={setEditedCaption}
-              cap={INSTAGRAM_CAP}
-              onCopy={() => copyToClipboard(
-                `${editedCaption}\n\n${generatedCopy.instagram_hashtags.map((t) => `#${t}`).join(' ')}`,
-                'instagram'
-              )}
-              copied={copiedField === 'instagram'}
-              footer={
-                <p className="text-sm text-muted-foreground">
-                  {generatedCopy.instagram_hashtags.map((tag) => `#${tag}`).join(' ')}
-                </p>
+              maxLength={IG_CAP}
+              rows={8}
+              hashtags={generatedCopy.instagram_hashtags}
+              onCopy={() =>
+                copyToClipboard(
+                  `${editedCaption}\n\n${generatedCopy.instagram_hashtags.map((t) => `#${t}`).join(' ')}`,
+                  'instagram',
+                )
               }
+              copied={copiedField === 'instagram'}
             />
 
-            {/* Website Description */}
-            <EditableCard
+            <EditableCopyCard
               title="Website Description"
-              value={editedWebsite}
-              onChange={(val) => {
-                setEditedWebsite(val)
-                // Reset publish success if the founder edits after publishing
-                if (publishSuccess) setPublishSuccess(false)
-              }}
-              cap={WEBSITE_CAP}
-              onCopy={() => copyToClipboard(editedWebsite, 'website')}
+              value={editedDescription}
+              onChange={setEditedDescription}
+              maxLength={WEB_CAP}
+              rows={6}
+              onCopy={() => copyToClipboard(editedDescription, 'website')}
               copied={copiedField === 'website'}
             />
 
@@ -396,7 +465,7 @@ export default function Home() {
             <div className="flex flex-col items-center gap-3 pt-2">
               <Button
                 onClick={handlePublish}
-                disabled={isPublishing || publishSuccess || !editedWebsite.trim()}
+                disabled={isPublishing || publishSuccess || !editedDescription.trim()}
                 variant={publishSuccess ? 'outline' : 'default'}
                 className="h-12 w-full max-w-sm gap-2"
               >
@@ -417,7 +486,7 @@ export default function Home() {
 
               {publishSuccess && (
                 <p className="text-center text-sm text-muted-foreground animate-in fade-in duration-300">
-                  Your edited description is now live on your storefront.
+                  Your product description is now live on your storefront.
                 </p>
               )}
               {publishError && (
@@ -426,7 +495,6 @@ export default function Home() {
                 </p>
               )}
             </div>
-
           </section>
         )}
 
@@ -434,117 +502,7 @@ export default function Home() {
 
       {/* Feedback Form */}
       <FeedbackForm />
-
     </main>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// EditableCard
-// ---------------------------------------------------------------------------
-function EditableCard({
-  title,
-  value,
-  onChange,
-  cap,
-  onCopy,
-  copied,
-  footer,
-}: {
-  title: string
-  value: string
-  onChange: (val: string) => void
-  cap: number
-  onCopy: () => void
-  copied: boolean
-  footer?: React.ReactNode
-}) {
-  const remaining = cap - value.length
-  const overLimit = remaining < 0
-
-  return (
-    <Card className="border-border/40">
-      <CardHeader className="flex flex-row items-center justify-between pb-3">
-        <CardTitle className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          {title}
-        </CardTitle>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onCopy}
-          className="size-8 text-muted-foreground hover:text-foreground"
-        >
-          {copied ? (
-            <Check className="size-4 text-green-600" />
-          ) : (
-            <Copy className="size-4" />
-          )}
-          <span className="sr-only">Copy to clipboard</span>
-        </Button>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <textarea
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          rows={6}
-          className="w-full resize-y rounded-md border border-border/60 bg-background px-3 py-2 text-sm text-foreground leading-relaxed placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        />
-        <div className="flex items-center justify-between">
-          {footer ?? <span />}
-          <span className={`text-xs tabular-nums ${overLimit ? 'text-destructive font-medium' : 'text-muted-foreground'}`}>
-            {overLimit ? `${Math.abs(remaining)} over limit` : `${remaining} remaining`}
-          </span>
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// CopyCard — kept for any future read-only display needs
-// ---------------------------------------------------------------------------
-function CopyCard({
-  title,
-  content,
-  hashtags,
-  onCopy,
-  copied,
-}: {
-  title: string
-  content: string
-  hashtags?: string[]
-  onCopy: () => void
-  copied: boolean
-}) {
-  return (
-    <Card className="border-border/40">
-      <CardHeader className="flex flex-row items-center justify-between pb-3">
-        <CardTitle className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          {title}
-        </CardTitle>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onCopy}
-          className="size-8 text-muted-foreground hover:text-foreground"
-        >
-          {copied ? (
-            <Check className="size-4 text-green-600" />
-          ) : (
-            <Copy className="size-4" />
-          )}
-          <span className="sr-only">Copy to clipboard</span>
-        </Button>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <p className="whitespace-pre-wrap text-foreground leading-relaxed">{content}</p>
-        {hashtags && hashtags.length > 0 && (
-          <p className="text-sm text-muted-foreground">
-            {hashtags.map((tag) => `#${tag}`).join(' ')}
-          </p>
-        )}
-      </CardContent>
-    </Card>
   )
 }
 
@@ -552,10 +510,10 @@ function CopyCard({
 // FeedbackForm — Formspree (xlgpwaby)
 // ---------------------------------------------------------------------------
 function FeedbackForm() {
-  const [submitted, setSubmitted] = useState(false)
+  const [submitted, setSubmitted]   = useState(false)
   const [submitting, setSubmitting] = useState(false)
-  const [feedback, setFeedback] = useState('')
-  const [email, setEmail] = useState('')
+  const [feedback, setFeedback]     = useState('')
+  const [email, setEmail]           = useState('')
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()

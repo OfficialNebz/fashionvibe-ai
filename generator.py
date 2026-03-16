@@ -461,6 +461,21 @@ class GenerateResponse(BaseModel):
 router = APIRouter(prefix="/generate", tags=["Generation"])
 
 
+@router.get(
+    "/personas",
+    summary="Return all personas grouped by category",
+)
+async def get_personas():
+    """
+    Returns the full persona list grouped by category.
+    Consumed by the frontend SelectGroup component.
+    """
+    return {
+        group: [p.value for p in personas]
+        for group, personas in PERSONA_GROUPS.items()
+    }
+
+
 @router.post(
     "",
     response_model=GenerateResponse,
