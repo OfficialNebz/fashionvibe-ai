@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Image from 'next/image'
 import { Copy, Check, ArrowRight, Sparkles } from 'lucide-react'
 import posthog from 'posthog-js'
@@ -32,8 +32,74 @@ import {
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-const IG_CAP  = 2200
-const WEB_CAP = 5000
+const IG_CAP        = 2200
+const WEB_CAP       = 5000
+const DEMO_LIMIT    = 3
+const RESET_MS      = 24 * 60 * 60 * 1000   // 24 hours in milliseconds
+const LS_COUNT_KEY  = 'fv_scrape_count'
+const LS_RESET_KEY  = 'fv_scrape_reset_ts'
+
+// ---------------------------------------------------------------------------
+// localStorage scrape quota helpers
+// ---------------------------------------------------------------------------
+// These functions are safe to call only in browser context (inside useEffect
+// or event handlers — never during SSR). Next.js server-renders this page,
+// so any localStorage access at module scope would throw.
+
+interface ScrapeQuota {
+  count: number           // scrapes used in the current window
+  remaining: number       // scrapes left
+  isLimited: boolean      // true when count >= DEMO_LIMIT within 24h window
+  resetTs: number         // epoch ms when the window started
+}
+
+function readQuota(): ScrapeQuota {
+  try {
+    const count   = parseInt(localStorage.getItem(LS_COUNT_KEY) ?? '0', 10)
+    const resetTs = parseInt(localStorage.getItem(LS_RESET_KEY) ?? '0', 10)
+    const now     = Date.now()
+
+    // If 24 hours have elapsed since the window started, treat as fresh
+    if (resetTs > 0 && now - resetTs >= RESET_MS) {
+      localStorage.setItem(LS_COUNT_KEY, '0')
+      localStorage.setItem(LS_RESET_KEY, String(now))
+      return { count: 0, remaining: DEMO_LIMIT, isLimited: false, resetTs: now }
+    }
+
+    const remaining  = Math.max(0, DEMO_LIMIT - count)
+    const isLimited  = count >= DEMO_LIMIT
+    return { count, remaining, isLimited, resetTs }
+  } catch {
+    // localStorage unavailable (private browsing on some browsers, SSR guard)
+    return { count: 0, remaining: DEMO_LIMIT, isLimited: false, resetTs: 0 }
+  }
+}
+
+function incrementQuota(): ScrapeQuota {
+  try {
+    const now     = Date.now()
+    const resetTs = parseInt(localStorage.getItem(LS_RESET_KEY) ?? '0', 10)
+
+    // Initialise the window timestamp on the first scrape
+    if (resetTs === 0) {
+      localStorage.setItem(LS_RESET_KEY, String(now))
+    }
+
+    const prev  = parseInt(localStorage.getItem(LS_COUNT_KEY) ?? '0', 10)
+    const next  = prev + 1
+    localStorage.setItem(LS_COUNT_KEY, String(next))
+
+    const remaining = Math.max(0, DEMO_LIMIT - next)
+    return {
+      count: next,
+      remaining,
+      isLimited: next >= DEMO_LIMIT,
+      resetTs: resetTs === 0 ? now : resetTs,
+    }
+  } catch {
+    return { count: 1, remaining: DEMO_LIMIT - 1, isLimited: false, resetTs: Date.now() }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Spinner
@@ -83,8 +149,8 @@ function EditableCopyCard({
   copied: boolean
   rows?: number
 }) {
-  const remaining  = maxLength - value.length
-  const nearLimit  = remaining < maxLength * 0.1
+  const remaining = maxLength - value.length
+  const nearLimit = remaining < maxLength * 0.1
 
   return (
     <Card className="border-border/40">
@@ -100,8 +166,7 @@ function EditableCopyCard({
         >
           {copied
             ? <Check className="size-4 text-green-600" />
-            : <Copy className="size-4" />
-          }
+            : <Copy className="size-4" />}
           <span className="sr-only">Copy to clipboard</span>
         </Button>
       </CardHeader>
@@ -133,26 +198,36 @@ function EditableCopyCard({
 // Home
 // ---------------------------------------------------------------------------
 export default function Home() {
-  // ── Core pipeline state ──────────────────────────────────────────────────
-  const [url, setUrl]                   = useState('')
-  const [product, setProduct]           = useState<ProductData | null>(null)
-  const [generatedCopy, setGeneratedCopy] = useState<GeneratedCopy | null>(null)
+  // ── Quota state — initialised from localStorage after hydration ──────────
+  // Starts at full quota to avoid a flash of "0 remaining" during SSR.
+  // useEffect corrects it immediately after mount.
+  const [quota, setQuota] = useState<ScrapeQuota>({
+    count: 0,
+    remaining: DEMO_LIMIT,
+    isLimited: false,
+    resetTs: 0,
+  })
 
-  // Editable fields are decoupled from generatedCopy so founder edits
-  // don't mutate the original AI output. handlePublish sends these values.
+  useEffect(() => {
+    // Safe to read localStorage now that we are in the browser
+    setQuota(readQuota())
+  }, [])
+
+  // ── Core pipeline state ──────────────────────────────────────────────────
+  const [url, setUrl]                             = useState('')
+  const [product, setProduct]                     = useState<ProductData | null>(null)
+  const [generatedCopy, setGeneratedCopy]         = useState<GeneratedCopy | null>(null)
   const [editedCaption, setEditedCaption]         = useState('')
   const [editedDescription, setEditedDescription] = useState('')
-
-  // The default persona — must be a valid Persona literal
-  const [selectedPersona, setSelectedPersona] = useState<Persona>('Exquisite')
+  const [selectedPersona, setSelectedPersona]     = useState<Persona>('Exquisite')
 
   // ── Loading & error state ────────────────────────────────────────────────
-  const [isScraping, setIsScraping]   = useState(false)
-  const [isGenerating, setIsGenerating] = useState(false)
-  const [isPublishing, setIsPublishing] = useState(false)
-  const [scrapeError, setScrapeError]   = useState<string | null>(null)
-  const [generateError, setGenerateError] = useState<string | null>(null)
-  const [publishError, setPublishError]   = useState<string | null>(null)
+  const [isScraping, setIsScraping]         = useState(false)
+  const [isGenerating, setIsGenerating]     = useState(false)
+  const [isPublishing, setIsPublishing]     = useState(false)
+  const [scrapeError, setScrapeError]       = useState<string | null>(null)
+  const [generateError, setGenerateError]   = useState<string | null>(null)
+  const [publishError, setPublishError]     = useState<string | null>(null)
   const [publishSuccess, setPublishSuccess] = useState(false)
   const [copiedField, setCopiedField]       = useState<string | null>(null)
 
@@ -160,6 +235,16 @@ export default function Home() {
   async function handleScrape(e: React.FormEvent) {
     e.preventDefault()
     if (!url.trim()) return
+
+    // Client-side quota check — before any network call
+    const currentQuota = readQuota()
+    if (currentQuota.isLimited) {
+      setScrapeError(
+        'Daily demo limit reached. Contact us to unlock the full pipeline.'
+      )
+      setQuota(currentQuota)
+      return
+    }
 
     setIsScraping(true)
     setScrapeError(null)
@@ -173,10 +258,16 @@ export default function Home() {
     try {
       const data = await scrapeProduct(url)
       setProduct(data)
+
+      // Increment only on success — failed scrapes don't cost a quota slot
+      const newQuota = incrementQuota()
+      setQuota(newQuota)
+
       posthog.capture('product_scraped', {
         persona: selectedPersona,
         product_title: data.title,
         vendor: data.vendor,
+        scrapes_used: newQuota.count,
       })
     } catch (err) {
       if (err instanceof ApiError) {
@@ -191,7 +282,7 @@ export default function Home() {
             setScrapeError('Product not found. Check the URL is pointing to a live product.')
             break
           case 429:
-            setScrapeError('You have used all 3 demo scrapes for the next 12 hours. Contact support to unlock the full pipeline.')
+            setScrapeError('Server limit reached. Contact us to unlock the full pipeline.')
             break
           case 504:
             setScrapeError('The store took too long to respond. Try again in a moment.')
@@ -221,7 +312,6 @@ export default function Home() {
     try {
       const copy = await generateCopy(product, selectedPersona)
       setGeneratedCopy(copy)
-      // Seed editable fields — founder owns these strings from this point
       setEditedCaption(copy.instagram_caption)
       setEditedDescription(copy.website_description)
       posthog.capture('copy_generated', {
@@ -249,8 +339,6 @@ export default function Home() {
   }
 
   // ── Publish ───────────────────────────────────────────────────────────────
-  // Sends editedDescription — the founder's current textarea value.
-  // was_edited tracks whether the copy was modified before publishing.
   async function handlePublish() {
     if (!product || !editedDescription.trim()) return
 
@@ -302,6 +390,14 @@ export default function Home() {
 
   const primaryImage = product?.images?.[0]
 
+  // ── Derived scrape button state ───────────────────────────────────────────
+  const scrapeButtonDisabled = isScraping || !url.trim() || quota.isLimited
+  const scrapeButtonLabel    = quota.isLimited
+    ? 'Limit Reached'
+    : isScraping
+    ? null           // shows spinner
+    : 'Scrape'
+
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <main className="min-h-screen bg-background">
@@ -310,7 +406,7 @@ export default function Home() {
         {/* Header */}
         <header className="mb-16 text-center">
           <h1 className="text-4xl font-light tracking-tight text-foreground">
-            FashionVibe
+            NeboCollections
           </h1>
           <p className="mt-3 text-muted-foreground">
             AI-powered copy for your fashion brand
@@ -318,7 +414,7 @@ export default function Home() {
         </header>
 
         {/* URL Input */}
-        <form onSubmit={handleScrape} className="mb-16">
+        <form onSubmit={handleScrape} className="mb-4">
           <div className="flex gap-3">
             <Input
               type="url"
@@ -326,25 +422,51 @@ export default function Home() {
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               className="h-12 flex-1 border-border/60 bg-background text-base"
-              disabled={isScraping}
+              disabled={isScraping || quota.isLimited}
             />
             <Button
               type="submit"
-              disabled={isScraping || !url.trim()}
+              disabled={scrapeButtonDisabled}
+              variant={quota.isLimited ? 'outline' : 'default'}
               className="h-12 px-6"
             >
-              {isScraping ? <Spinner /> : (
+              {isScraping ? (
+                <Spinner />
+              ) : quota.isLimited ? (
+                <span>{scrapeButtonLabel}</span>
+              ) : (
                 <>
-                  <span>Scrape</span>
+                  <span>{scrapeButtonLabel}</span>
                   <ArrowRight className="size-4" />
                 </>
               )}
             </Button>
           </div>
+
+          {/* Quota indicator — always visible, updates after each scrape */}
+          <div className="mt-2 flex items-center justify-between">
+            <p className={`text-xs tabular-nums ${
+              quota.isLimited
+                ? 'text-destructive'
+                : quota.remaining === 1
+                ? 'text-amber-500'
+                : 'text-muted-foreground'
+            }`}>
+              {quota.isLimited
+                ? 'Daily demo limit reached — contact us to unlock the full pipeline.'
+                : `Demo Mode: ${quota.remaining} of ${DEMO_LIMIT} scrapes remaining today`
+              }
+            </p>
+          </div>
+
+          {/* Error below the quota indicator */}
           {scrapeError && (
-            <p className="mt-3 text-sm text-destructive">{scrapeError}</p>
+            <p className="mt-2 text-sm text-destructive">{scrapeError}</p>
           )}
         </form>
+
+        {/* mb-16 spacer only when no error / quota message is showing */}
+        <div className="mb-12" />
 
         {/* Product Display */}
         {product && (
@@ -367,9 +489,7 @@ export default function Home() {
                   {product.title}
                 </h2>
                 {product.vendor && (
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    by {product.vendor}
-                  </p>
+                  <p className="mt-1 text-sm text-muted-foreground">by {product.vendor}</p>
                 )}
                 {product.product_type && (
                   <p className="mt-2 text-xs uppercase tracking-wider text-muted-foreground/70">
@@ -379,7 +499,7 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Persona Selector — grouped by WOMEN / MEN / CHILDREN */}
+            {/* Persona Selector */}
             <div className="mt-10 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
               <Select
                 value={selectedPersona}
@@ -421,9 +541,7 @@ export default function Home() {
             </div>
 
             {generateError && (
-              <p className="mt-4 text-center text-sm text-destructive">
-                {generateError}
-              </p>
+              <p className="mt-4 text-center text-sm text-destructive">{generateError}</p>
             )}
           </section>
         )}
