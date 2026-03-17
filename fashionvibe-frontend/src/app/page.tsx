@@ -400,15 +400,15 @@ export default function Home() {
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <main className="min-h-screen bg-background">
+    <main className="min-h-screen bg-background font-sans">
       <div className="mx-auto max-w-3xl px-6 py-20">
 
         {/* Header */}
         <header className="mb-16 text-center">
-          <h1 className="text-4xl font-light tracking-tight text-foreground">
+          <h1 className="text-4xl font-extralight uppercase tracking-[0.2em] text-foreground">
             NeboCollections
           </h1>
-          <p className="mt-3 text-muted-foreground">
+          <p className="mt-3 text-sm tracking-wide text-muted-foreground/60">
             AI-powered copy for your fashion brand
           </p>
         </header>
