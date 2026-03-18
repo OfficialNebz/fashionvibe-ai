@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import Image from 'next/image'
-import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
+import { motion, AnimatePresence, useReducedMotion, type Variants } from 'framer-motion'
 import { Copy, Check, ArrowRight, Sparkles } from 'lucide-react'
 import posthog from 'posthog-js'
 
@@ -81,15 +81,15 @@ const CYCLING_HEADLINES = [
 ]
 
 // ---------------------------------------------------------------------------
-// Framer variants — single unified system for all content
+// Framer variants — Explicitly typed to satisfy Vercel's TS Compiler
 // ---------------------------------------------------------------------------
-const containerVariants = {
+const containerVariants: Variants = {
   hidden: {},
   show: {
     transition: { staggerChildren: 0.10, delayChildren: 0.05 },
   },
 }
-const itemVariants = {
+const itemVariants: Variants = {
   hidden: { opacity: 0, y: 14 },
   show:   { opacity: 1, y: 0, transition: { duration: 0.44, ease: 'easeOut' } },
 }
