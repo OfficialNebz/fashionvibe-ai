@@ -1,4 +1,4 @@
-# FashionVibe AI — Python dependencies
+# NeboCollections AI — Python dependencies
 # Generated for Render deployment.
 # Pin exact versions to guarantee reproducible builds.
 # To update: pip install -U <package> then update the version here.

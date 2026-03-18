@@ -1,13 +1,12 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Image from 'next/image'
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
 import { Copy, Check, ArrowRight, Sparkles } from 'lucide-react'
 import posthog from 'posthog-js'
 
-import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Select,
   SelectContent,
@@ -30,75 +29,260 @@ import {
 } from '@/lib/api'
 
 // ---------------------------------------------------------------------------
-// Constants
+// Font tokens — inline always wins CSS cascade
 // ---------------------------------------------------------------------------
-const IG_CAP        = 2200
-const WEB_CAP       = 5000
-const DEMO_LIMIT    = 3
-const RESET_MS      = 24 * 60 * 60 * 1000   // 24 hours in milliseconds
-const LS_COUNT_KEY  = 'fv_scrape_count'
-const LS_RESET_KEY  = 'fv_scrape_reset_ts'
+const OUTFIT  = { fontFamily: 'var(--font-outfit), sans-serif', fontWeight: 900 } as const
+const OUTFIT4 = { fontFamily: 'var(--font-outfit), sans-serif', fontWeight: 400 } as const
 
 // ---------------------------------------------------------------------------
-// localStorage scrape quota helpers
+// Button style — hardcoded solid white, not dependent on any variant system
+// This is defined at module level so it never varies, is never ghost
 // ---------------------------------------------------------------------------
-// These functions are safe to call only in browser context (inside useEffect
-// or event handlers — never during SSR). Next.js server-renders this page,
-// so any localStorage access at module scope would throw.
-
-interface ScrapeQuota {
-  count: number           // scrapes used in the current window
-  remaining: number       // scrapes left
-  isLimited: boolean      // true when count >= DEMO_LIMIT within 24h window
-  resetTs: number         // epoch ms when the window started
+const BTN_SOLID: React.CSSProperties = {
+  display:         'inline-flex',
+  alignItems:      'center',
+  justifyContent:  'center',
+  gap:             8,
+  height:          48,
+  paddingLeft:     22,
+  paddingRight:    22,
+  borderRadius:    14,
+  border:          'none',
+  outline:         'none',
+  background:      '#ffffff',
+  color:           '#000000',
+  fontFamily:      'var(--font-outfit), sans-serif',
+  fontWeight:      900,
+  fontSize:        14,
+  letterSpacing:   '0.04em',
+  whiteSpace:      'nowrap' as const,
+  cursor:          'pointer',
+  position:        'relative' as const,
+  zIndex:          30,
+  transition:      'opacity 0.18s ease',
 }
+
+// ---------------------------------------------------------------------------
+// App constants
+// ---------------------------------------------------------------------------
+const IG_CAP       = 2200
+const WEB_CAP      = 5000
+const DEMO_LIMIT   = 3
+const RESET_MS     = 24 * 60 * 60 * 1000
+const LS_COUNT_KEY = 'fv_scrape_count'
+const LS_RESET_KEY = 'fv_scrape_reset_ts'
+
+const CYCLING_HEADLINES = [
+  'Exquisite Boutique.',
+  'Hypebeast Drop.',
+  'Whimsical Brand.',
+  'Eco-Conscious Label.',
+  'Tailored Modern.',
+]
+
+// ---------------------------------------------------------------------------
+// Framer variants — single unified system for all content
+// ---------------------------------------------------------------------------
+const containerVariants = {
+  hidden: {},
+  show: {
+    transition: { staggerChildren: 0.10, delayChildren: 0.05 },
+  },
+}
+const itemVariants = {
+  hidden: { opacity: 0, y: 14 },
+  show:   { opacity: 1, y: 0, transition: { duration: 0.44, ease: [0.22, 1, 0.36, 1] } },
+}
+
+// ---------------------------------------------------------------------------
+// Quota helpers
+// ---------------------------------------------------------------------------
+interface ScrapeQuota { count: number; remaining: number; isLimited: boolean; resetTs: number }
 
 function readQuota(): ScrapeQuota {
   try {
     const count   = parseInt(localStorage.getItem(LS_COUNT_KEY) ?? '0', 10)
     const resetTs = parseInt(localStorage.getItem(LS_RESET_KEY) ?? '0', 10)
     const now     = Date.now()
-
-    // If 24 hours have elapsed since the window started, treat as fresh
     if (resetTs > 0 && now - resetTs >= RESET_MS) {
       localStorage.setItem(LS_COUNT_KEY, '0')
       localStorage.setItem(LS_RESET_KEY, String(now))
       return { count: 0, remaining: DEMO_LIMIT, isLimited: false, resetTs: now }
     }
-
-    const remaining  = Math.max(0, DEMO_LIMIT - count)
-    const isLimited  = count >= DEMO_LIMIT
-    return { count, remaining, isLimited, resetTs }
-  } catch {
-    // localStorage unavailable (private browsing on some browsers, SSR guard)
-    return { count: 0, remaining: DEMO_LIMIT, isLimited: false, resetTs: 0 }
-  }
+    return { count, remaining: Math.max(0, DEMO_LIMIT - count), isLimited: count >= DEMO_LIMIT, resetTs }
+  } catch { return { count: 0, remaining: DEMO_LIMIT, isLimited: false, resetTs: 0 } }
 }
 
 function incrementQuota(): ScrapeQuota {
   try {
     const now     = Date.now()
     const resetTs = parseInt(localStorage.getItem(LS_RESET_KEY) ?? '0', 10)
-
-    // Initialise the window timestamp on the first scrape
-    if (resetTs === 0) {
-      localStorage.setItem(LS_RESET_KEY, String(now))
-    }
-
-    const prev  = parseInt(localStorage.getItem(LS_COUNT_KEY) ?? '0', 10)
-    const next  = prev + 1
+    if (resetTs === 0) localStorage.setItem(LS_RESET_KEY, String(now))
+    const next = parseInt(localStorage.getItem(LS_COUNT_KEY) ?? '0', 10) + 1
     localStorage.setItem(LS_COUNT_KEY, String(next))
+    return { count: next, remaining: Math.max(0, DEMO_LIMIT - next), isLimited: next >= DEMO_LIMIT, resetTs: resetTs === 0 ? now : resetTs }
+  } catch { return { count: 1, remaining: DEMO_LIMIT - 1, isLimited: false, resetTs: Date.now() } }
+}
 
-    const remaining = Math.max(0, DEMO_LIMIT - next)
+// ---------------------------------------------------------------------------
+// ShootingStarBackground — client-only (mounted guard fixes SSR hydration)
+// ---------------------------------------------------------------------------
+interface Star { id: number; x1: number; y1: number; x2: number; y2: number; duration: number; delay: number; sw: number; opacity: number }
+
+function buildStars(n: number): Star[] {
+  return Array.from({ length: n }, (_, i) => {
+    const top = Math.random() > 0.4
+    const x1  = top ? Math.random() * 1600 : -50
+    const y1  = top ? -50 : Math.random() * 900
+    const len = 160 + Math.random() * 260
+    const ang = (38 + Math.random() * 18) * Math.PI / 180
+    const rng = Math.random()
+    const sw  = rng > 0.95 ? 2.4 : rng > 0.80 ? 1.3 : 0.55
     return {
-      count: next,
-      remaining,
-      isLimited: next >= DEMO_LIMIT,
-      resetTs: resetTs === 0 ? now : resetTs,
+      id: i, x1, y1,
+      x2: x1 + Math.cos(ang) * len,
+      y2: y1 + Math.sin(ang) * len,
+      duration: 0.5 + Math.random() * 0.9,
+      delay: -(Math.random() * 9),
+      sw,
+      opacity: sw > 2 ? 0.92 : sw > 1 ? 0.65 : 0.40,
     }
-  } catch {
-    return { count: 1, remaining: DEMO_LIMIT - 1, isLimited: false, resetTs: Date.now() }
-  }
+  })
+}
+
+function ShootingStarBackground({ isScraping }: { isScraping: boolean }) {
+  const reduced = useReducedMotion()
+  const [mounted, setMounted] = useState(false)
+  const starsRef = useRef<Star[]>([])
+  useEffect(() => { starsRef.current = buildStars(80); setMounted(true) }, [])
+  if (!mounted) return null
+  const stars = starsRef.current
+  return (
+    // z-0: permanently behind everything
+    <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
+      <svg className="absolute inset-0 w-full h-full" viewBox="0 0 1440 900"
+        preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="sg" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%"   stopColor="white" stopOpacity="0" />
+            <stop offset="25%"  stopColor="white" stopOpacity="0.08" />
+            <stop offset="65%"  stopColor="white" stopOpacity="1" />
+            <stop offset="100%" stopColor="white" stopOpacity="0" />
+          </linearGradient>
+          <linearGradient id="sga" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%"   stopColor="#e0e7ff" stopOpacity="0" />
+            <stop offset="25%"  stopColor="#c7d2fe" stopOpacity="0.15" />
+            <stop offset="65%"  stopColor="white"   stopOpacity="1" />
+            <stop offset="100%" stopColor="#c7d2fe" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        {stars.map((s) => {
+          const grad = `url(#${isScraping ? 'sga' : 'sg'})`
+          if (reduced) return (
+            <line key={s.id} x1={s.x1} y1={s.y1} x2={s.x2} y2={s.y2}
+              stroke={grad} strokeWidth={s.sw} opacity={s.opacity * 0.35} />
+          )
+          const dx = s.x2 - s.x1, dy = s.y2 - s.y1
+          return (
+            <motion.line key={s.id} x1={s.x1} y1={s.y1} x2={s.x2} y2={s.y2}
+              stroke={grad}
+              strokeWidth={isScraping ? s.sw * 1.5 : s.sw}
+              strokeLinecap="round"
+              animate={{ x: [0, dx * 1.9], y: [0, dy * 1.9], opacity: [0, s.opacity, s.opacity, 0] }}
+              transition={{ duration: isScraping ? s.duration * 0.4 : s.duration, delay: s.delay, repeat: Infinity, ease: 'linear', times: [0, 0.12, 0.72, 1] }}
+            />
+          )
+        })}
+      </svg>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// CyclingHeadline — typewriter, Outfit 900
+// ---------------------------------------------------------------------------
+function CyclingHeadline() {
+  const [idx, setIdx]     = useState(0)
+  const [text, setText]   = useState('')
+  const [blink, setBlink] = useState(true)
+  const reduced = useReducedMotion()
+
+  useEffect(() => {
+    const target = CYCLING_HEADLINES[idx]
+    if (reduced) { setText(target); return }
+    setText(''); setBlink(true)
+    let i = 0
+    const id = setInterval(() => {
+      i++; setText(target.slice(0, i))
+      if (i >= target.length) {
+        clearInterval(id); setBlink(false)
+        setTimeout(() => setIdx((p) => (p + 1) % CYCLING_HEADLINES.length), 1700)
+      }
+    }, 36)
+    return () => clearInterval(id)
+  }, [idx, reduced])
+
+  return (
+    <span style={{ ...OUTFIT, color: 'rgba(255,255,255,0.9)', fontSize: 'inherit' }}>
+      {text}
+      {blink && <span style={{ display: 'inline-block', width: 2, height: '0.8em', background: 'white', marginLeft: 2, verticalAlign: 'middle', opacity: 0.8 }} />}
+    </span>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// GlassBox — 1px white border, glass bg, glow on focus
+// ---------------------------------------------------------------------------
+function GlassBox({ children, focused = false, style = {} }: {
+  children: React.ReactNode; focused?: boolean; style?: React.CSSProperties
+}) {
+  return (
+    <div style={{
+      borderRadius: 14,
+      backdropFilter: 'blur(10px)',
+      background: focused ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)',
+      border: `1px solid ${focused ? 'rgba(255,255,255,0.80)' : 'rgba(255,255,255,0.20)'}`,
+      boxShadow: focused ? '0 0 0 3px rgba(255,255,255,0.07), 0 0 28px rgba(255,255,255,0.07)' : 'none',
+      transition: 'all 0.2s ease',
+      ...style,
+    }}>
+      {children}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// SolidButton — always white background, black text, no variants, no ghost
+// The only button component used in this file. Replaces iCloudBtn.
+// ---------------------------------------------------------------------------
+function SolidButton({
+  onClick,
+  disabled = false,
+  type = 'button',
+  children,
+  fullWidth = false,
+}: {
+  onClick?: () => void
+  disabled?: boolean
+  type?: 'button' | 'submit'
+  children: React.ReactNode
+  fullWidth?: boolean
+}) {
+  return (
+    <button
+      type={type}
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        ...BTN_SOLID,
+        width: fullWidth ? '100%' : 'auto',
+        opacity: disabled ? 0.35 : 1,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+      }}
+    >
+      {children}
+    </button>
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -106,91 +290,89 @@ function incrementQuota(): ScrapeQuota {
 // ---------------------------------------------------------------------------
 function Spinner() {
   return (
-    <svg
-      className="size-4 animate-spin"
-      xmlns="http://www.w3.org/2000/svg"
-      fill="none"
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-    >
-      <circle
-        className="opacity-25"
-        cx="12" cy="12" r="10"
-        stroke="currentColor" strokeWidth="4"
-      />
-      <path
-        className="opacity-75"
-        fill="currentColor"
-        d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-      />
+    <svg className="size-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
     </svg>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// GlowPublishButton — spinning conic border when active, solid when done
+// ---------------------------------------------------------------------------
+function GlowPublishButton({ onClick, disabled, isPublishing, publishSuccess }: {
+  onClick: () => void; disabled: boolean; isPublishing: boolean; publishSuccess: boolean
+}) {
+  const active = !disabled && !publishSuccess && !isPublishing
+  return (
+    <div style={{ position: 'relative', width: '100%', maxWidth: 300 }}>
+      <AnimatePresence>
+        {active && (
+          <motion.div
+            style={{ position: 'absolute', inset: -1.5, borderRadius: 14, zIndex: 0, overflow: 'hidden' }}
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.5 }}>
+            <motion.div style={{ position: 'absolute', inset: 0, background: 'conic-gradient(from 0deg, transparent, rgba(255,255,255,0.65), transparent)' }}
+              animate={{ rotate: 360 }} transition={{ duration: 2.6, repeat: Infinity, ease: 'linear' }} />
+            <div style={{ position: 'absolute', inset: 1.5, borderRadius: 13, background: '#000' }} />
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <button
+        onClick={onClick}
+        disabled={disabled}
+        style={{
+          ...OUTFIT,
+          position: 'relative', zIndex: 10,
+          width: '100%', height: 48,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+          borderRadius: 14,
+          background: 'rgba(255,255,255,0.05)',
+          border: '1px solid rgba(255,255,255,0.18)',
+          color: publishSuccess ? '#4ade80' : 'rgba(255,255,255,0.85)',
+          opacity: disabled ? 0.3 : 1,
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          fontSize: 13, letterSpacing: '0.06em',
+          transition: 'all 0.18s ease',
+        }}
+      >
+        {isPublishing   ? <><Spinner /><span>Publishing…</span></> :
+         publishSuccess ? <><Check style={{ width: 16, height: 16 }} /><span style={{ color: '#4ade80' }}>Published</span></> :
+                          <span>Publish to Shopify</span>}
+      </button>
+    </div>
   )
 }
 
 // ---------------------------------------------------------------------------
 // EditableCopyCard
 // ---------------------------------------------------------------------------
-function EditableCopyCard({
-  title,
-  value,
-  onChange,
-  maxLength,
-  hashtags,
-  onCopy,
-  copied,
-  rows = 6,
-}: {
-  title: string
-  value: string
-  onChange: (val: string) => void
-  maxLength: number
-  hashtags?: string[]
-  onCopy: () => void
-  copied: boolean
-  rows?: number
+function EditableCopyCard({ title, value, onChange, maxLength, hashtags, onCopy, copied, rows = 5 }: {
+  title: string; value: string; onChange: (v: string) => void
+  maxLength: number; hashtags?: string[]; onCopy: () => void; copied: boolean; rows?: number
 }) {
   const remaining = maxLength - value.length
   const nearLimit = remaining < maxLength * 0.1
-
   return (
-    <Card className="border-border/40">
-      <CardHeader className="flex flex-row items-center justify-between pb-3">
-        <CardTitle className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          {title}
-        </CardTitle>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onCopy}
-          className="size-8 text-muted-foreground hover:text-foreground"
-        >
-          {copied
-            ? <Check className="size-4 text-green-600" />
-            : <Copy className="size-4" />}
-          <span className="sr-only">Copy to clipboard</span>
-        </Button>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <textarea
-          value={value}
-          onChange={(e) => onChange(e.target.value.slice(0, maxLength))}
-          rows={rows}
-          className="w-full resize-y rounded-md border border-border/60 bg-background px-3 py-2 text-sm text-foreground leading-relaxed placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        />
-        <div className="flex items-center justify-between gap-2">
-          {hashtags && hashtags.length > 0 && (
-            <p className="text-xs text-muted-foreground truncate">
-              {hashtags.map((tag) => `#${tag}`).join(' ')}
-            </p>
-          )}
-          <p className={`ml-auto shrink-0 text-xs tabular-nums ${
-            nearLimit ? 'text-destructive' : 'text-muted-foreground'
-          }`}>
-            {remaining.toLocaleString()} / {maxLength.toLocaleString()}
+    <div style={{ borderRadius: 14, padding: '16px 18px', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.10)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <span style={{ ...OUTFIT, fontSize: 10, letterSpacing: '0.20em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.40)' }}>{title}</span>
+        <button onClick={onCopy} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: copied ? '#4ade80' : 'rgba(255,255,255,0.30)' }}>
+          {copied ? <Check style={{ width: 14, height: 14 }} /> : <Copy style={{ width: 14, height: 14 }} />}
+        </button>
+      </div>
+      <textarea value={value} onChange={(e) => onChange(e.target.value.slice(0, maxLength))} rows={rows}
+        style={{ ...OUTFIT4, width: '100%', resize: 'vertical', background: 'transparent', border: 'none', outline: 'none', color: 'rgba(255,255,255,0.82)', fontSize: 13, lineHeight: 1.65 }} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,0.07)' }}>
+        {hashtags && hashtags.length > 0 && (
+          <p style={{ ...OUTFIT4, fontSize: 10, color: 'rgba(255,255,255,0.22)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '75%' }}>
+            {hashtags.map((t) => `#${t}`).join(' ')}
           </p>
-        </div>
-      </CardContent>
-    </Card>
+        )}
+        <p style={{ ...OUTFIT, fontSize: 10, marginLeft: 'auto', color: nearLimit ? '#f87171' : 'rgba(255,255,255,0.18)' }}>
+          {remaining.toLocaleString()} / {maxLength.toLocaleString()}
+        </p>
+      </div>
+    </div>
   )
 }
 
@@ -198,440 +380,239 @@ function EditableCopyCard({
 // Home
 // ---------------------------------------------------------------------------
 export default function Home() {
-  // ── Quota state — initialised from localStorage after hydration ──────────
-  // Starts at full quota to avoid a flash of "0 remaining" during SSR.
-  // useEffect corrects it immediately after mount.
-  const [quota, setQuota] = useState<ScrapeQuota>({
-    count: 0,
-    remaining: DEMO_LIMIT,
-    isLimited: false,
-    resetTs: 0,
-  })
+  const [quota, setQuota] = useState<ScrapeQuota>({ count: 0, remaining: DEMO_LIMIT, isLimited: false, resetTs: 0 })
+  useEffect(() => { setQuota(readQuota()) }, [])
 
-  useEffect(() => {
-    // Safe to read localStorage now that we are in the browser
-    setQuota(readQuota())
-  }, [])
-
-  // ── Core pipeline state ──────────────────────────────────────────────────
   const [url, setUrl]                             = useState('')
+  const [urlFocused, setUrlFocused]               = useState(false)
   const [product, setProduct]                     = useState<ProductData | null>(null)
   const [generatedCopy, setGeneratedCopy]         = useState<GeneratedCopy | null>(null)
   const [editedCaption, setEditedCaption]         = useState('')
   const [editedDescription, setEditedDescription] = useState('')
   const [selectedPersona, setSelectedPersona]     = useState<Persona>('Exquisite')
+  const [isScraping, setIsScraping]               = useState(false)
+  const [isGenerating, setIsGenerating]           = useState(false)
+  const [isPublishing, setIsPublishing]           = useState(false)
+  const [scrapeError, setScrapeError]             = useState<string | null>(null)
+  const [generateError, setGenerateError]         = useState<string | null>(null)
+  const [publishError, setPublishError]           = useState<string | null>(null)
+  const [publishSuccess, setPublishSuccess]       = useState(false)
+  const [copiedField, setCopiedField]             = useState<string | null>(null)
 
-  // ── Loading & error state ────────────────────────────────────────────────
-  const [isScraping, setIsScraping]         = useState(false)
-  const [isGenerating, setIsGenerating]     = useState(false)
-  const [isPublishing, setIsPublishing]     = useState(false)
-  const [scrapeError, setScrapeError]       = useState<string | null>(null)
-  const [generateError, setGenerateError]   = useState<string | null>(null)
-  const [publishError, setPublishError]     = useState<string | null>(null)
-  const [publishSuccess, setPublishSuccess] = useState(false)
-  const [copiedField, setCopiedField]       = useState<string | null>(null)
-
-  // ── Scrape ────────────────────────────────────────────────────────────────
   async function handleScrape(e: React.FormEvent) {
     e.preventDefault()
     if (!url.trim()) return
-
-    // Client-side quota check — before any network call
-    const currentQuota = readQuota()
-    if (currentQuota.isLimited) {
-      setScrapeError(
-        'Daily demo limit reached. Contact us to unlock the full pipeline.'
-      )
-      setQuota(currentQuota)
-      return
-    }
-
-    setIsScraping(true)
-    setScrapeError(null)
-    setProduct(null)
-    setGeneratedCopy(null)
-    setEditedCaption('')
-    setEditedDescription('')
-    setPublishSuccess(false)
-    setPublishError(null)
-
+    const cq = readQuota()
+    if (cq.isLimited) { setScrapeError('Demo limit reached. Contact us.'); setQuota(cq); return }
+    setIsScraping(true); setScrapeError(null); setProduct(null); setGeneratedCopy(null)
+    setEditedCaption(''); setEditedDescription(''); setPublishSuccess(false); setPublishError(null)
     try {
-      const data = await scrapeProduct(url)
-      setProduct(data)
-
-      // Increment only on success — failed scrapes don't cost a quota slot
-      const newQuota = incrementQuota()
-      setQuota(newQuota)
-
-      posthog.capture('product_scraped', {
-        persona: selectedPersona,
-        product_title: data.title,
-        vendor: data.vendor,
-        scrapes_used: newQuota.count,
-      })
+      const data = await scrapeProduct(url); setProduct(data)
+      const nq = incrementQuota(); setQuota(nq)
+      posthog.capture('product_scraped', { persona: selectedPersona, product_title: data.title, vendor: data.vendor, scrapes_used: nq.count })
     } catch (err) {
-      if (err instanceof ApiError) {
-        switch (err.status) {
-          case 400:
-            setScrapeError("That URL doesn't look like a Shopify product page. Make sure it contains /products/ in the path.")
-            break
-          case 403:
-            setScrapeError('This store is password-protected and cannot be accessed.')
-            break
-          case 404:
-            setScrapeError('Product not found. Check the URL is pointing to a live product.')
-            break
-          case 429:
-            setScrapeError('Server limit reached. Contact us to unlock the full pipeline.')
-            break
-          case 504:
-            setScrapeError('The store took too long to respond. Try again in a moment.')
-            break
-          default:
-            setScrapeError(err.message)
-        }
-      } else {
-        setScrapeError(err instanceof Error ? err.message : 'Failed to scrape product.')
-      }
-    } finally {
-      setIsScraping(false)
-    }
+      const m: Record<number, string> = { 400: 'Not a Shopify product URL.', 403: 'Store is password-protected.', 404: 'Product not found.', 429: 'Server limit reached.', 504: 'Store timed out.' }
+      setScrapeError(err instanceof ApiError ? (m[err.status] ?? err.message) : (err instanceof Error ? err.message : 'Scrape failed.'))
+    } finally { setIsScraping(false) }
   }
 
-  // ── Generate ──────────────────────────────────────────────────────────────
   async function handleGenerate() {
     if (!product) return
-
-    setIsGenerating(true)
-    setGenerateError(null)
-    setPublishSuccess(false)
-    setPublishError(null)
-    setEditedCaption('')
-    setEditedDescription('')
-
+    setIsGenerating(true); setGenerateError(null); setPublishSuccess(false); setPublishError(null)
+    setEditedCaption(''); setEditedDescription('')
     try {
       const copy = await generateCopy(product, selectedPersona)
-      setGeneratedCopy(copy)
-      setEditedCaption(copy.instagram_caption)
-      setEditedDescription(copy.website_description)
-      posthog.capture('copy_generated', {
-        persona: selectedPersona,
-        product_title: product.title,
-      })
-    } catch (err) {
-      if (err instanceof ApiError) {
-        switch (err.status) {
-          case 422:
-            setGenerateError('Invalid persona selected. Please choose a valid option and try again.')
-            break
-          case 503:
-            setGenerateError('The AI service is temporarily unavailable. Try again in a moment.')
-            break
-          default:
-            setGenerateError(err.message)
-        }
-      } else {
-        setGenerateError(err instanceof Error ? err.message : 'Failed to generate copy.')
-      }
-    } finally {
-      setIsGenerating(false)
-    }
+      setGeneratedCopy(copy); setEditedCaption(copy.instagram_caption); setEditedDescription(copy.website_description)
+      posthog.capture('copy_generated', { persona: selectedPersona, product_title: product.title })
+    } catch (err) { setGenerateError(err instanceof ApiError ? err.message : 'Generation failed.') }
+    finally { setIsGenerating(false) }
   }
 
-  // ── Publish ───────────────────────────────────────────────────────────────
   async function handlePublish() {
     if (!product || !editedDescription.trim()) return
-
-    setIsPublishing(true)
-    setPublishError(null)
-    setPublishSuccess(false)
-
+    setIsPublishing(true); setPublishError(null); setPublishSuccess(false)
     try {
-      await publishDescription(product.product_id, editedDescription)
-      setPublishSuccess(true)
-      posthog.capture('description_published', {
-        product_id: product.product_id,
-        product_title: product.title,
-        persona: selectedPersona,
-        was_edited: editedDescription !== generatedCopy?.website_description,
-      })
+      await publishDescription(product.product_id, editedDescription); setPublishSuccess(true)
+      posthog.capture('description_published', { product_id: product.product_id, product_title: product.title, persona: selectedPersona, was_edited: editedDescription !== generatedCopy?.website_description })
     } catch (err) {
-      if (err instanceof ApiError) {
-        switch (err.status) {
-          case 401:
-            setPublishError('Shopify rejected the access token. Check SHOPIFY_ACCESS_TOKEN in your .env.')
-            break
-          case 403:
-            setPublishError('Your Shopify token is missing write_products permission.')
-            break
-          case 404:
-            setPublishError('Product not found in your configured store. Verify SHOPIFY_STORE_NAME matches.')
-            break
-          case 429:
-            setPublishError('Shopify rate limit hit. Wait a moment and try again.')
-            break
-          default:
-            setPublishError(err.message)
-        }
-      } else {
-        setPublishError(err instanceof Error ? err.message : 'Publish failed.')
-      }
-    } finally {
-      setIsPublishing(false)
-    }
+      const m: Record<number, string> = { 401: 'Token rejected.', 403: 'Missing write_products.', 404: 'Product not found.', 429: 'Rate limited.' }
+      setPublishError(err instanceof ApiError ? (m[err.status] ?? err.message) : 'Publish failed.')
+    } finally { setIsPublishing(false) }
   }
 
-  // ── Clipboard ─────────────────────────────────────────────────────────────
-  async function copyToClipboard(text: string, field: string) {
-    await navigator.clipboard.writeText(text)
-    setCopiedField(field)
-    setTimeout(() => setCopiedField(null), 2000)
+  async function clipCopy(text: string, field: string) {
+    await navigator.clipboard.writeText(text); setCopiedField(field); setTimeout(() => setCopiedField(null), 2000)
   }
 
-  const primaryImage = product?.images?.[0]
+  const primaryImage   = product?.images?.[0]
+  const scrapeDisabled = isScraping || !url.trim() || quota.isLimited
 
-  // ── Derived scrape button state ───────────────────────────────────────────
-  const scrapeButtonDisabled = isScraping || !url.trim() || quota.isLimited
-  const scrapeButtonLabel    = quota.isLimited
-    ? 'Limit Reached'
-    : isScraping
-    ? null           // shows spinner
-    : 'Scrape'
-
-  // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <main className="min-h-screen bg-background font-sans">
-      <div className="mx-auto max-w-3xl px-6 py-20">
+    <div className="relative min-h-screen w-full bg-black" style={OUTFIT4}>
+      {/* Stars: z-0 — permanently behind all content */}
+      <ShootingStarBackground isScraping={isScraping} />
 
-        {/* Header */}
-        <header className="mb-16 text-center">
-          <h1 className="text-4xl font-extralight uppercase tracking-[0.2em] text-foreground">
+      {/*
+        Single unified motion.div with containerVariants drives the stagger
+        for every element: header, input, feedback section.
+        z-50 ensures nothing from the star layer can block pointer events.
+      */}
+      <motion.div
+        className="relative z-50 mx-auto max-w-xl px-6 pt-16 pb-24"
+        variants={containerVariants}
+        initial="hidden"
+        animate="show"
+      >
+
+        {/* ── Hero ────────────────────────────────────────────────────────── */}
+        <motion.div variants={itemVariants} style={{ textAlign: 'center', marginBottom: 48 }}>
+          <h1 style={{ ...OUTFIT, fontSize: '2.5rem', lineHeight: 1.05, letterSpacing: '0em', color: '#ffffff', margin: '0 0 6px 0' }}>
             NeboCollections
           </h1>
-          <p className="mt-3 text-sm tracking-wide text-muted-foreground/60">
-            AI-powered copy for your fashion brand
+          <p style={{ ...OUTFIT4, fontSize: 17, color: 'rgba(255,255,255,0.58)', lineHeight: 1.45, margin: 0 }}>
+            Copy engine for <CyclingHeadline />
           </p>
-        </header>
+        </motion.div>
 
-        {/* URL Input */}
-        <form onSubmit={handleScrape} className="mb-4">
-          <div className="flex gap-3">
-            <Input
-              type="url"
-              placeholder="Paste your Shopify product URL..."
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              className="h-12 flex-1 border-border/60 bg-background text-base"
-              disabled={isScraping || quota.isLimited}
-            />
-            <Button
-              type="submit"
-              disabled={scrapeButtonDisabled}
-              variant={quota.isLimited ? 'outline' : 'default'}
-              className="h-12 px-6"
-            >
-              {isScraping ? (
-                <Spinner />
-              ) : quota.isLimited ? (
-                <span>{scrapeButtonLabel}</span>
-              ) : (
-                <>
-                  <span>{scrapeButtonLabel}</span>
-                  <ArrowRight className="size-4" />
-                </>
-              )}
-            </Button>
-          </div>
+        {/* ── URL Input + Scrape ──────────────────────────────────────────── */}
+        <motion.div variants={itemVariants} style={{ marginBottom: 10 }}>
+          <form onSubmit={handleScrape}>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <GlassBox focused={urlFocused} style={{ flex: 1 }}>
+                <Input
+                  type="url"
+                  placeholder="Paste your Shopify product URL…"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  onFocus={() => setUrlFocused(true)}
+                  onBlur={() => setUrlFocused(false)}
+                  disabled={isScraping || quota.isLimited}
+                  style={{ ...OUTFIT4, height: 48, border: 'none', background: 'transparent', color: '#fff', fontSize: 14, padding: '0 16px', width: '100%', outline: 'none', boxShadow: 'none' }}
+                  className="placeholder:text-white/30 focus-visible:ring-0"
+                />
+              </GlassBox>
 
-          {/* Quota indicator — always visible, updates after each scrape */}
-          <div className="mt-2 flex items-center justify-between">
-            <p className={`text-xs tabular-nums ${
-              quota.isLimited
-                ? 'text-destructive'
-                : quota.remaining === 1
-                ? 'text-amber-500'
-                : 'text-muted-foreground'
-            }`}>
-              {quota.isLimited
-                ? 'Daily demo limit reached — contact us to unlock the full pipeline.'
-                : `Demo Mode: ${quota.remaining} of ${DEMO_LIMIT} scrapes remaining today`
-              }
-            </p>
-          </div>
-
-          {/* Error below the quota indicator */}
-          {scrapeError && (
-            <p className="mt-2 text-sm text-destructive">{scrapeError}</p>
-          )}
-        </form>
-
-        {/* mb-16 spacer only when no error / quota message is showing */}
-        <div className="mb-12" />
-
-        {/* Product Display */}
-        {product && (
-          <section className="mb-16 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="flex flex-col items-center gap-8 sm:flex-row sm:items-start">
-              {primaryImage && (
-                <div className="relative aspect-square w-full max-w-[200px] shrink-0 overflow-hidden rounded-lg border border-border/40 bg-muted/30">
-                  <Image
-                    src={primaryImage.src}
-                    alt={primaryImage.alt || product.title}
-                    fill
-                    unoptimized
-                    className="object-cover"
-                    sizes="200px"
-                  />
-                </div>
-              )}
-              <div className="flex-1 text-center sm:text-left">
-                <h2 className="text-2xl font-medium tracking-tight text-foreground">
-                  {product.title}
-                </h2>
-                {product.vendor && (
-                  <p className="mt-1 text-sm text-muted-foreground">by {product.vendor}</p>
-                )}
-                {product.product_type && (
-                  <p className="mt-2 text-xs uppercase tracking-wider text-muted-foreground/70">
-                    {product.product_type}
-                  </p>
-                )}
-              </div>
+              {/* Solid white Scrape — BTN_SOLID hardcoded, no variant system */}
+              <SolidButton type="submit" disabled={scrapeDisabled}>
+                {isScraping
+                  ? <><Spinner /><span style={{ color: '#000' }}>Wait…</span></>
+                  : quota.isLimited
+                  ? <span style={{ color: '#000' }}>Limit</span>
+                  : <><span style={{ color: '#000' }}>Scrape</span><ArrowRight style={{ width: 16, height: 16, color: '#000' }} /></>
+                }
+              </SolidButton>
             </div>
 
-            {/* Persona Selector */}
-            <div className="mt-10 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
-              <Select
-                value={selectedPersona}
-                onValueChange={(value) => setSelectedPersona(value as Persona)}
-              >
-                <SelectTrigger className="h-12 w-full sm:w-[220px]">
-                  <SelectValue placeholder="Select persona" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(Object.entries(PERSONA_GROUPS) as [string, Persona[]][]).map(
-                    ([group, personas]) => (
+            <p style={{ ...OUTFIT4, fontSize: 11, marginTop: 8, color: quota.isLimited ? '#f87171' : quota.remaining === 1 ? '#fbbf24' : 'rgba(255,255,255,0.30)' }}>
+              {quota.isLimited ? 'Demo limit reached — contact us to unlock.' : `${quota.remaining} of ${DEMO_LIMIT} demo scrapes remaining`}
+            </p>
+            {scrapeError && <p style={{ ...OUTFIT4, fontSize: 12, color: '#f87171', marginTop: 4 }}>{scrapeError}</p>}
+          </form>
+        </motion.div>
+
+        {/* ── Product card ────────────────────────────────────────────────── */}
+        <AnimatePresence>
+          {product && (
+            <motion.div key="product"
+              variants={itemVariants} initial="hidden" animate="show"
+              style={{ marginTop: 40, marginBottom: 36 }}>
+
+              <div style={{ display: 'flex', gap: 18, alignItems: 'flex-start' }}>
+                {primaryImage && (
+                  <div style={{ width: 72, height: 72, flexShrink: 0, borderRadius: 12, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.14)', position: 'relative' }}>
+                    <Image src={primaryImage.src} alt={primaryImage.alt || product.title} fill unoptimized className="object-cover" sizes="72px" />
+                  </div>
+                )}
+                <div style={{ flex: 1, minWidth: 0, paddingTop: 2 }}>
+                  <p style={{ ...OUTFIT, fontSize: 15, color: '#fff', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{product.title}</p>
+                  {product.vendor && <p style={{ ...OUTFIT4, fontSize: 12, color: 'rgba(255,255,255,0.40)', marginTop: 4 }}>by {product.vendor}</p>}
+                </div>
+              </div>
+
+              {/* Persona + Generate */}
+              <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
+                <Select value={selectedPersona} onValueChange={(v) => setSelectedPersona(v as Persona)}>
+                  <SelectTrigger style={{ ...OUTFIT4, height: 48, flex: 1, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.16)', borderRadius: 14, color: 'rgba(255,255,255,0.80)', fontSize: 13, paddingLeft: 14 }} className="focus:ring-0">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent style={{ background: '#0c0c0c', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 12 }}>
+                    {(Object.entries(PERSONA_GROUPS) as [string, Persona[]][]).map(([group, personas]) => (
                       <SelectGroup key={group}>
-                        <SelectLabel className="text-xs font-semibold uppercase tracking-widest text-muted-foreground px-2 py-1.5">
+                        <SelectLabel style={{ ...OUTFIT, fontSize: 10, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.30)', padding: '6px 8px' }}>
                           {group}
                         </SelectLabel>
-                        {personas.map((persona) => (
-                          <SelectItem key={persona} value={persona}>
-                            {persona}
+                        {personas.map((p) => (
+                          <SelectItem key={p} value={p} style={{ ...OUTFIT4, fontSize: 13, color: 'rgba(255,255,255,0.75)' }} className="focus:bg-white/[0.08] focus:text-white">
+                            {p}
                           </SelectItem>
                         ))}
                       </SelectGroup>
-                    )
-                  )}
-                </SelectContent>
-              </Select>
+                    ))}
+                  </SelectContent>
+                </Select>
 
-              <Button
-                onClick={handleGenerate}
-                disabled={isGenerating}
-                className="h-12 w-full px-8 sm:w-auto"
-              >
-                {isGenerating ? <Spinner /> : (
-                  <>
-                    <Sparkles className="size-4" />
-                    <span>Generate Copy</span>
-                  </>
-                )}
-              </Button>
-            </div>
+                {/* Solid white Generate */}
+                <SolidButton onClick={handleGenerate} disabled={isGenerating}>
+                  {isGenerating
+                    ? <><Spinner /><span style={{ color: '#000' }}>Working…</span></>
+                    : <><Sparkles style={{ width: 15, height: 15, color: '#000' }} /><span style={{ color: '#000' }}>Generate</span></>
+                  }
+                </SolidButton>
+              </div>
+              {generateError && <p style={{ ...OUTFIT4, fontSize: 12, color: '#f87171', marginTop: 8 }}>{generateError}</p>}
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-            {generateError && (
-              <p className="mt-4 text-center text-sm text-destructive">{generateError}</p>
-            )}
-          </section>
-        )}
+        {/* ── Generated copy ──────────────────────────────────────────────── */}
+        <AnimatePresence>
+          {generatedCopy && (
+            <motion.div key="copy"
+              variants={itemVariants} initial="hidden" animate="show"
+              style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <p style={{ ...OUTFIT, fontSize: 10, letterSpacing: '0.20em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.25)', textAlign: 'center', marginBottom: 4 }}>
+                Edit before publishing
+              </p>
+              <EditableCopyCard title="Instagram Caption" value={editedCaption} onChange={setEditedCaption}
+                maxLength={IG_CAP} rows={7} hashtags={generatedCopy.instagram_hashtags}
+                onCopy={() => clipCopy(`${editedCaption}\n\n${generatedCopy.instagram_hashtags.map((t) => `#${t}`).join(' ')}`, 'ig')}
+                copied={copiedField === 'ig'} />
+              <EditableCopyCard title="Website Description" value={editedDescription} onChange={setEditedDescription}
+                maxLength={WEB_CAP} rows={5} onCopy={() => clipCopy(editedDescription, 'web')} copied={copiedField === 'web'} />
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, paddingTop: 4 }}>
+                <GlowPublishButton onClick={handlePublish}
+                  disabled={isPublishing || publishSuccess || !editedDescription.trim()}
+                  isPublishing={isPublishing} publishSuccess={publishSuccess} />
+                <AnimatePresence>
+                  {publishSuccess && <motion.p style={{ ...OUTFIT, fontSize: 12, color: '#4ade80' }} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>Live on your storefront.</motion.p>}
+                  {publishError && <motion.p style={{ ...OUTFIT4, fontSize: 12, color: '#f87171', textAlign: 'center' }} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>{publishError}</motion.p>}
+                </AnimatePresence>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-        {/* Generated Copy — Editable Cards */}
-        {generatedCopy && (
-          <section className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <p className="text-center text-xs text-muted-foreground tracking-wide uppercase">
-              Edit before publishing — changes are yours
-            </p>
+        {/* ── Feedback section — inside same containerVariants stagger ─────── */}
+        <motion.div variants={itemVariants}
+          style={{ borderTop: '1px solid rgba(255,255,255,0.07)', marginTop: 64, paddingTop: 48 }}>
+          <FeedbackForm />
+        </motion.div>
 
-            <EditableCopyCard
-              title="Instagram Caption"
-              value={editedCaption}
-              onChange={setEditedCaption}
-              maxLength={IG_CAP}
-              rows={8}
-              hashtags={generatedCopy.instagram_hashtags}
-              onCopy={() =>
-                copyToClipboard(
-                  `${editedCaption}\n\n${generatedCopy.instagram_hashtags.map((t) => `#${t}`).join(' ')}`,
-                  'instagram',
-                )
-              }
-              copied={copiedField === 'instagram'}
-            />
-
-            <EditableCopyCard
-              title="Website Description"
-              value={editedDescription}
-              onChange={setEditedDescription}
-              maxLength={WEB_CAP}
-              rows={6}
-              onCopy={() => copyToClipboard(editedDescription, 'website')}
-              copied={copiedField === 'website'}
-            />
-
-            {/* Publish to Shopify */}
-            <div className="flex flex-col items-center gap-3 pt-2">
-              <Button
-                onClick={handlePublish}
-                disabled={isPublishing || publishSuccess || !editedDescription.trim()}
-                variant={publishSuccess ? 'outline' : 'default'}
-                className="h-12 w-full max-w-sm gap-2"
-              >
-                {isPublishing ? (
-                  <>
-                    <Spinner />
-                    <span>Publishing...</span>
-                  </>
-                ) : publishSuccess ? (
-                  <>
-                    <Check className="size-4 text-green-600" />
-                    <span className="text-green-600">Published to Shopify</span>
-                  </>
-                ) : (
-                  <span>Publish to Shopify</span>
-                )}
-              </Button>
-
-              {publishSuccess && (
-                <p className="text-center text-sm text-muted-foreground animate-in fade-in duration-300">
-                  Your product description is now live on your storefront.
-                </p>
-              )}
-              {publishError && (
-                <p className="text-center text-sm text-destructive animate-in fade-in duration-300">
-                  {publishError}
-                </p>
-              )}
-            </div>
-          </section>
-        )}
-
-      </div>
-
-      {/* Feedback Form */}
-      <FeedbackForm />
-    </main>
+      </motion.div>
+    </div>
   )
 }
 
 // ---------------------------------------------------------------------------
-// FeedbackForm — Formspree (xlgpwaby)
+// FeedbackForm — pulled out for clarity, uses SolidButton
 // ---------------------------------------------------------------------------
 function FeedbackForm() {
   const [submitted, setSubmitted]   = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [feedback, setFeedback]     = useState('')
   const [email, setEmail]           = useState('')
+  const [emailF, setEmailF]         = useState(false)
+  const [textF, setTextF]           = useState(false)
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -643,60 +624,60 @@ function FeedbackForm() {
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({ email, message: feedback }),
       })
-      if (res.ok) {
-        setSubmitted(true)
-        setFeedback('')
-        setEmail('')
-      }
-    } finally {
-      setSubmitting(false)
-    }
+      if (res.ok) { setSubmitted(true); setFeedback(''); setEmail('') }
+    } finally { setSubmitting(false) }
   }
 
   return (
-    <div className="mx-auto max-w-3xl px-6 mt-20 pb-20 border-t border-border/40 pt-12">
-      <div className="text-center mb-8">
-        <h2 className="text-lg font-light tracking-tight text-foreground">
-          Share your thoughts
+    <div>
+      <div style={{ textAlign: 'center', marginBottom: 28 }}>
+        <h2 style={{ ...OUTFIT, fontSize: 22, color: '#fff', letterSpacing: '-0.01em', margin: 0 }}>
+          Share Your Thoughts
         </h2>
-        <p className="mt-2 text-sm text-muted-foreground">
-          What would make this tool essential for your brand?
+        <p style={{ ...OUTFIT4, fontSize: 14, color: 'rgba(255,255,255,0.40)', marginTop: 6, lineHeight: 1.5 }}>
+          What would make this essential for your brand?
         </p>
       </div>
+
       {submitted ? (
-        <div className="flex flex-col items-center gap-2 py-6 animate-in fade-in duration-300">
-          <Check className="size-5 text-green-600" />
-          <p className="text-sm text-muted-foreground">
-            Received — thank you. We read every response.
-          </p>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: '28px 0' }}>
+          <Check style={{ width: 18, height: 18, color: '#4ade80' }} />
+          <p style={{ ...OUTFIT4, fontSize: 13, color: 'rgba(255,255,255,0.45)' }}>Received — thank you.</p>
         </div>
       ) : (
-        <div className="space-y-3 max-w-lg mx-auto">
-          <Input
-            type="email"
-            placeholder="Your email (optional)"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="h-11 border-border/60 bg-background"
-            disabled={submitting}
-          />
-          <textarea
-            placeholder="What's working? What's missing? What would you pay for?"
-            value={feedback}
-            onChange={(e) => setFeedback(e.target.value)}
-            rows={4}
-            disabled={submitting}
-            className="w-full resize-none rounded-md border border-border/60 bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
-          />
-          <Button
-            onClick={handleSubmit}
-            disabled={submitting || !feedback.trim()}
-            variant="outline"
-            className="w-full h-11"
-          >
-            {submitting ? 'Sending...' : 'Send Feedback'}
-          </Button>
-        </div>
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <GlassBox focused={emailF}>
+            <Input type="email" placeholder="Your email (optional)" value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              onFocus={() => setEmailF(true)} onBlur={() => setEmailF(false)}
+              disabled={submitting}
+              style={{ ...OUTFIT4, height: 48, border: 'none', background: 'transparent', color: '#fff', fontSize: 14, padding: '0 16px', width: '100%', outline: 'none', boxShadow: 'none' }}
+              className="placeholder:text-white/30 focus-visible:ring-0" />
+          </GlassBox>
+
+          <GlassBox focused={textF}>
+            <textarea
+              placeholder="What's working? What's missing? What would you pay for?"
+              value={feedback}
+              onChange={(e) => setFeedback(e.target.value)}
+              onFocus={() => setTextF(true)}
+              onBlur={() => setTextF(false)}
+              rows={4}
+              disabled={submitting}
+              style={{ ...OUTFIT4, width: '100%', resize: 'none', background: 'transparent', border: 'none', outline: 'none', color: '#fff', fontSize: 14, padding: '14px 16px', lineHeight: 1.6, borderRadius: 14 }}
+              className="placeholder:text-white/30 disabled:opacity-50"
+            />
+          </GlassBox>
+
+          {/* Solid white Send Feedback — hardcoded BTN_SOLID, no ghost possibility */}
+          <div style={{ marginTop: 20 }}>
+            <SolidButton type="submit" disabled={submitting || !feedback.trim()} fullWidth>
+              <span style={{ color: '#000', fontFamily: 'var(--font-outfit)', fontWeight: 900, fontSize: 14 }}>
+                {submitting ? 'Sending…' : 'Send Feedback'}
+              </span>
+            </SolidButton>
+          </div>
+        </form>
       )}
     </div>
   )
