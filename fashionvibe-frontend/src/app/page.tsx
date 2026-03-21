@@ -61,9 +61,8 @@ import {
 const EditableCopyCard = dynamic(
   () => import('./_components/EditableCopyCard'),
   {
-    ssr: false,
-    loading: () => (
-      <div style={{ borderRadius: 14, height: 160, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', animation: 'pulse 1.5s ease-in-out infinite' }} />
+      loading: () => (
+      <div style={{ borderRadius: 14, height: 160, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)'}} />
     ),
   },
 )
@@ -148,7 +147,7 @@ const DEMO_PRODUCT: ProductData = {
   images: [
     {
       position: 1,
-      src:      'fashionvibe-frontend\src\app\The Crawford Sweater.jpg',
+      src:      '/The Crawford Sweater.jpg',
       alt:      'The Crawford Sweater by Taylor Stitch',
       width:    800,
       height:   1000,
@@ -817,6 +816,7 @@ export default function Home() {
 
         {/* ── Feedback section — lazy-loaded FeedbackForm ─────────────────── */}
         <motion.div
+          id="waitlist" // CLINICAL FIX: This gives the layout.tsx link a target to scroll to
           variants={itemVariants}
           style={{ borderTop: '1px solid rgba(255,255,255,0.07)', marginTop: 64, paddingTop: 48 }}
         >
