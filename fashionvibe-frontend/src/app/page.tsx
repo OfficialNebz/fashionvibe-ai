@@ -70,7 +70,6 @@ const EditableCopyCard = dynamic(
 const FeedbackForm = dynamic(
   () => import('./_components/FeedbackForm'),
   {
-    ssr: false,
     loading: () => (
       <div style={{ borderRadius: 14, height: 240, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }} />
     ),
