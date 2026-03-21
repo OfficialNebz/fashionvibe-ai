@@ -148,7 +148,7 @@ const DEMO_PRODUCT: ProductData = {
   images: [
     {
       position: 1,
-      src:      'The Crawford Sweater.jpg',
+      src:      'fashionvibe-frontend\src\app\The Crawford Sweater.jpg',
       alt:      'The Crawford Sweater by Taylor Stitch',
       width:    800,
       height:   1000,
@@ -229,7 +229,7 @@ function BeforeAfterBlock() {
           Optimised Copy
         </p>
         <p style={{ ...OUTFIT4, fontSize: 12, color: 'rgba(255,255,255,0.78)', lineHeight: 1.7, margin: 0 }}>
-          Born from organic fields, built for the modern wardrobe. The Mayer drapes with quiet authority — a shirt that earns its place in every chapter.
+          Born from organic fields, built for the modern wardrobe. The Crawford Sweater drapes with quiet authority — a shirt that earns its place in every chapter.
         </p>
       </div>
     </div>
