@@ -74,10 +74,10 @@ export default function RootLayout({
           <span className="text-[11px] font-black tracking-[0.12em] uppercase text-white/70">
             Full access?{' '}
             <a
-              href="mailto:brendannebolisa@gmail.com"
+              href="#waitlist"
               className="text-white underline underline-offset-2 hover:text-white/80 transition-colors"
             >
-              Get in touch
+              Join the Waitlist
             </a>
           </span>
         </div>
