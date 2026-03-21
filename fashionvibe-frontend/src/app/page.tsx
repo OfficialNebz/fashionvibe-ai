@@ -6,17 +6,17 @@
  * Performance optimisations applied (Lighthouse mobile score: 83 → target 95+):
  *
  * 1. SVG Throttling — ShootingStarBackground checks window.innerWidth on mount.
- *    Mobile  (< 768px): 20 stars — reduces JS execution by ~75%, cutting the
- *                         2.1s main-thread blocking on mobile CPUs.
- *    Desktop (≥ 768px): 80 stars — full visual fidelity retained.
+ * Mobile  (< 768px): 20 stars — reduces JS execution by ~75%, cutting the
+ * 2.1s main-thread blocking on mobile CPUs.
+ * Desktop (≥ 768px): 80 stars — full visual fidelity retained.
  *
  * 2. Dynamic Lazy Loading — FeedbackForm and EditableCopyCard are loaded via
- *    next/dynamic with ssr: false. They are below the fold and their code
- *    (~8 KiB each) is deferred until after the hero + scrape UI has painted,
- *    directly reducing the 209 KiB unused-JS metric at initial load.
+ * next/dynamic with ssr: false. They are below the fold and their code
+ * (~8 KiB each) is deferred until after the hero + scrape UI has painted,
+ * directly reducing the 209 KiB unused-JS metric at initial load.
  *
  * 3. Font display: 'swap' — confirmed in layout.tsx for both Syne and Outfit.
- *    Text renders with fallback fonts immediately; web fonts swap in on load.
+ * Text renders with fallback fonts immediately; web fonts swap in on load.
  */
 
 import { useState, useEffect, useRef, Suspense } from 'react'
@@ -178,7 +178,6 @@ const itemVariants: Variants = {
   show:   { opacity: 1, y: 0, transition: { duration: 0.44, ease: [0.22, 1, 0.36, 1] } },
 }
 
-
 // ---------------------------------------------------------------------------
 // BeforeAfterBlock — social proof / differentiation.
 // Rendered between the hero and the URL input. Shows a raw Shopify description
@@ -187,9 +186,15 @@ const itemVariants: Variants = {
 // ---------------------------------------------------------------------------
 function BeforeAfterBlock() {
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 32 }}>
+    <div style={{ 
+      display: 'flex', 
+      flexWrap: 'wrap', // CLINICAL FIX: Allows the flex items to wrap to a new line
+      gap: 12, 
+      marginBottom: 32 
+    }}>
       {/* Before — raw Shopify description */}
       <div style={{
+        flex: '1 1 240px', // CLINICAL FIX: Forces stacking on screens narrower than ~500px
         borderRadius: 14,
         padding: '18px 16px',
         background: 'rgba(255,255,255,0.03)',
@@ -208,6 +213,7 @@ function BeforeAfterBlock() {
 
       {/* After — Nebo-optimised copy */}
       <div style={{
+        flex: '1 1 240px', // CLINICAL FIX: Matches the sibling width to ensure symmetric stacking
         borderRadius: 14,
         padding: '18px 16px',
         background: 'rgba(255,255,255,0.06)',
