@@ -139,7 +139,7 @@ const CYCLING_HEADLINES = [
 // ---------------------------------------------------------------------------
 const DEMO_PRODUCT: ProductData = {
   product_id:       0,
-  title:            'The Mayer Shirt — Indigo',
+  title:            'The Crawford Sweater',
   description_raw:  '100% organic cotton. Machine wash cold. Available in S–XXL. Imported.',
   description_html: '<p>100% organic cotton. Machine wash cold. Available in S–XXL. Imported.</p>',
   product_type:     'Shirts',
@@ -148,8 +148,8 @@ const DEMO_PRODUCT: ProductData = {
   images: [
     {
       position: 1,
-      src:      'https://cdn.shopify.com/s/files/1/0070/7032/files/taylor-stitch-placeholder.jpg',
-      alt:      'The Mayer Shirt in Indigo by Taylor Stitch',
+      src:      'The Crawford Sweater.jpg',
+      alt:      'The Crawford Sweater by Taylor Stitch',
       width:    800,
       height:   1000,
     },
@@ -161,8 +161,8 @@ const DEMO_PRODUCT: ProductData = {
     { id: 4, title: 'XL',  price: '98.00', sku: 'TS-MAYER-IND-XL',  available: true,  inventory_quantity: 3  },
     { id: 5, title: 'XXL', price: '98.00', sku: 'TS-MAYER-IND-XXL', available: false, inventory_quantity: 0  },
   ],
-  source_url:        'https://taylorstitch.com/products/the-mayer-shirt-indigo',
-  products_json_url: 'https://taylorstitch.com/products/the-mayer-shirt-indigo.json',
+  source_url:        'https://www.taylorstitch.com/products/crawford-sweater-in-navy',
+  products_json_url: 'https://www.taylorstitch.com/products/crawford-sweater-in-navy',
 }
 
 // ---------------------------------------------------------------------------
